@@ -1,0 +1,29 @@
+# --- dependencies ---
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# --- env & secrets ---
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# --- next.js ---
+.next/
+out/
+
+# --- python ---
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# --- misc ---
+.DS_Store
+*.log
+npm-debug.log*

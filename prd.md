@@ -103,7 +103,7 @@ Landing → Daftar/Login → Dashboard
 │
 [Backend: FastAPI] ── [PostgreSQL]
 │ [Redis: queue/cache]
-[GPU Worker: Celery + ONNX Runtime]
+[GPU Worker: Celery + PyTorch (Real-ESRGAN/GFPGAN)]
 ├── Real-ESRGAN (2x/4x)
 └── GFPGAN / CodeFormer
 │
@@ -117,23 +117,23 @@ Landing → Daftar/Login → Dashboard
 | Queue | Celery + Redis | Job GPU asinkron & retry |
 | Database | PostgreSQL | Reliabel; SQLite hanya untuk dev lokal |
 | Storage | Cloudflare R2 + CDN | Bebas egress fee, cepat di Indonesia |
-| AI Serving | ONNX Runtime (CUDA EP) — atau PyTorch 2.x + torch.compile (keputusan di Fase 0) | Inference cepat; tiling + FP16 wajib untuk input besar |
+| AI Serving | PyTorch 2.x + torch.compile (keputusan Fase 0 — ADR-002); ONNX Runtime ditunda ke Fase 2/3 | Tiling + FP16 wajib untuk input besar; tiling/FP16/face-enhance tersedia out-of-the-box |
 | Auth | NextAuth / Clerk | Implementasi cepat |
 | Payment | Midtrans / Xendit | QRIS, e-wallet, VA (lokal) |
-| Infra | Docker; dev lokal → GPU cloud (**long-running worker** Vast.ai/RunPod Secure Cloud + Celery, atau **serverless per-request** — keputusan arsitektur diselesaikan di Fase 0) → AWS/GCP saat scale | Biaya efisien bertahap |
+| Infra | Docker; dev lokal → GPU cloud (**long-running worker** Vast.ai on-demand + Celery — keputusan Fase 0, ADR-001; **serverless** dievaluasi ulang di Fase 3) → AWS/GCP saat scale | Biaya efisien bertahap |
 
-> **Catatan arsitektur GPU:** Celery (worker persisten) dan serverless GPU (request-based) adalah model yang berbeda — jangan dicampur. Keputusan wajib dibuat di Fase 0. GPU worker harus menggunakan pool `solo` (bukan prefork) karena CUDA context.
+> **Catatan arsitektur GPU:** Celery (worker persisten) dan serverless GPU (request-based) adalah model yang berbeda — jangan dicampur. Keputusan sudah dibuat di Fase 0: **long-running worker** (ADR-001) + **PyTorch** (ADR-002) — lihat DECISIONS.md. GPU worker harus menggunakan pool `solo` (bukan prefork) karena CUDA context.
 
 ## 10. Kebutuhan Model AI
 
 | Model | Fungsi | Format | Catatan |
 |---|---|---|---|
-| Real-ESRGAN (x2/x4) | Super-resolution utama | ONNX | Default untuk foto umum |
-| GFPGAN / CodeFormer | Restorasi wajah | ONNX | Opsi toggle |
-| (Opsional) Denoise/Color | Pra-pemrosesan | ONNX/OpenCV | Ringan, jalan di CPU |
+| Real-ESRGAN (x2/x4) | Super-resolution utama | PyTorch (FP16) | Default untuk foto umum — ADR-002 |
+| GFPGAN / CodeFormer | Restorasi wajah | PyTorch (bundle RealESRGANer) | Opsi toggle (`--face_enhance`) |
+| (Opsional) Denoise/Color | Pra-pemrosesan | PyTorch (`realesr-general-x4v3`) / OpenCV | Ringan; denoise via flag `-dn` |
 
 - **Target kualitas:** tajam natural, tanpa artefak wajah mengerikan (uncanny); evaluasi visual + metrik (PSNR/SSIM, plus metrik no-reference NIQE/BRISQUE karena foto real tanpa ground truth) pada set uji internal.
-- **Pipeline wajib untuk input besar:** export ONNX dengan dynamic axes; tiling + overlap padding (10–32 px) untuk mencegah OOM di GPU (1080p 4x → output 8K melebihi VRAM T4 16GB); FP16; pertimbangkan batas output resolusi + format default WebP/JPEG (PNG 8K bisa 50–100 MB).
+- **Pipeline wajib untuk input besar (PyTorch):** tiling + overlap padding (`--tile` 400–512, `tile_pad` 10–32 px) untuk mencegah OOM di GPU (1080p 4x → output 8K melebihi VRAM T4 16GB); FP16; format output default WebP q90 (JPEG opsi; PNG lossless hanya atas permintaan ≤ 4096 px — keputusan ADR-004); batas output resolusi maks 7680×4320. Bila mengekspor ke ONNX di masa depan: wajib dynamic axes.
 - **Fallback:** bila GPU utama down, rute ke provider API pihak ketiga (Replicate/WaveSpeed).
 - **Dev lokal:** CPU laptop dev **tidak mendukung AVX2** → ONNX Runtime resmi tidak dapat berjalan lokal; gunakan mock pipeline (stub OpenCV resize) di laptop, uji model di Google Colab (lihat §12).
 
@@ -152,7 +152,7 @@ Landing → Daftar/Login → Dashboard
 - **Perangkat developer:** HP Notebook, AMD A8-7410 (4 core ~2.2GHz), RAM 12GB, GPU integrated Radeon R5, Windows 10.
   - **Implikasi kritis:** CPU A8-7410 **tidak mendukung AVX2**, sedangkan wheel resmi `onnxruntime` (Windows) **wajib AVX2** dan akan crash (illegal instruction) saat memuat model. **Semua inference ML dilarang berjalan di laptop ini** — termasuk model INT8/quantized.
   - **Strategi:** laptop hanya untuk frontend/backend + unit test dengan *mock pipeline* (stub OpenCV resize); semua uji & prototyping model di **Google Colab**; integrasi end-to-end dan production di **GPU cloud** (keputusan arsitektur GPU diselesaikan di Fase 0 — lihat §9).
-- **Cost model per gambar (dasar KPI gross margin ≥ 60%):** GPU T4 serverless ≈ $0,5–0,8/jam; 1080p 4x (tiling, FP16) ≈ 4–10 detik inference → **±Rp 15–25/gambar** biaya GPU. Revenue efektif ±Rp 500/gambar (paket kredit) → **gross margin ±95%**; target 60% aman, tetapi diverifikasi di Fase 1 dengan pengukuran aktual (GPU-hour + cold start + R2 egress).
+- **Cost model per gambar (dasar KPI gross margin ≥ 60%):** harga aktual 2026 (ADR-001) — Vast.ai T4 on-demand $0,05–0,12/jam (median ~$0,05), RTX 4090 ~$0,13–0,47/jam; 1080p 4x (tiling, FP16) ≈ 4–10 detik inference → **±Rp 2–6/gambar** biaya GPU (turun dari asumsi awal Rp 15–25). Revenue efektif ±Rp 500/gambar (paket kredit) → gross margin GPU-only ±99%; target 60% sangat aman, tetap diverifikasi di Fase 1 dengan pengukuran aktual (GPU-hour + idle + R2 egress).
 - Budget awal terbatas → prioritas layanan dengan free tier / pay-per-use.
 - Asumsi: user memiliki koneksi mobile minimal 4G; server region Singapore (latensi rendah ke Indonesia).
 

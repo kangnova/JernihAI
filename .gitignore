@@ -23,6 +23,9 @@ out/
 build/
 dist/
 
+# --- uploads & hasil (privasi — FR-07, jangan pernah commit gambar user) ---
+api/storage/
+
 # --- misc ---
 .DS_Store
 *.log

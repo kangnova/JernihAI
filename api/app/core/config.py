@@ -39,5 +39,13 @@ class Settings(BaseSettings):
     # Redirect tujuan setelah Google login sukses/gagal di web.
     web_url: str = "http://localhost:3000"
 
+    # --- Upload & storage (Fase 1 — FR-02/FR-07) ---
+    # Folder relatif terhadap root repo; di Docker menjadi /app/storage/...
+    upload_dir: str = "storage/uploads"
+    result_dir: str = "storage/results"
+    max_upload_bytes: int = 10 * 1024 * 1024  # 10 MB
+    # True = proses job inline tanpa Redis (dev lokal & test end-to-end).
+    celery_task_always_eager: bool = False
+
 
 settings = Settings()

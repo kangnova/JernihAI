@@ -1,4 +1,5 @@
 import { HealthBadge } from "@/components/HealthBadge";
+import Link from "next/link";
 
 const services = [
   {
@@ -75,6 +76,12 @@ export default function Home() {
 
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <HealthBadge />
+          <Link
+            href="/login"
+            className="rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+          >
+            Masuk
+          </Link>
           {stack.map((t) => (
             <span
               key={t}

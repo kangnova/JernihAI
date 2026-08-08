@@ -17,8 +17,12 @@ Format: ADR ringan. Status: `proposed` (belum dieksekusi) / `accepted` / `supers
 
 ## ADR-003: Auth (NextAuth vs Clerk)
 
-- **Status:** `proposed`
-- **Rekomendasi:** **NextAuth (Auth.js)** — self-host, tanpa biaya tambahan, kontrol penuh atas data pengguna (selaras UU PDP). Clerk dipertimbangkan bila butuh percepatan development.
+- **Status:** `accepted` (Fase 1 — dipilih: **JWT di FastAPI + httpOnly cookie**)
+- **Konteks:** Opsi awal adalah NextAuth/Clerk (frontend), tapi backend FastAPI adalah otoritas bisnis (kuota, riwayat, job) sehingga perlu mengenali user dari token yang ia validasi sendiri.
+- **Keputusan:** FastAPI terbitkan **JWT HS256** yang ditaruh di **httpOnly cookie** (`SameSite=Lax`, `Secure` di produksi). Web (Next.js) cukup kirim request dengan `credentials: include` — satu sumber kebenaran, tanpa library auth tambahan di frontend.
+- **Google OAuth:** alur klasik (redirect → callback → tukar code → set cookie) dihandle langsung oleh FastAPI via `httpx`.
+- **Password:** bcrypt (bukan plaintext). Migrasi ke Clerk/NextAuth tetap dimungkinkan karena `provider` dicatat di model User.
+- **Konsekuensi:** CORS harus `allow_credentials=true`; cookie `SameSite=Lax` cukup karena web & API berbagi origin domain di produksi (via Nginx gateway).
 
 ## ADR-004: Format Output Default
 

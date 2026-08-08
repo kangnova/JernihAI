@@ -8,7 +8,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jernihai}
       POSTGRES_DB: ${POSTGRES_DB:-jernihai}
     ports:
-      - "5432:5432"
+      # Host port bisa di-override bila 5432 terpakai: POSTGRES_PORT=5434
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

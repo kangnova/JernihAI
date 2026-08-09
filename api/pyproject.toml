@@ -28,6 +28,21 @@ dev = [
     "aiosqlite>=0.20.0",
 ]
 
+# Backend inference ML (Fase 2 — ADR-002). DIPASANG HANYA di image worker
+# GPU (Dockerfile.worker): torch/torchvision sudah tersedia dari base image
+# pytorch/pytorch, jangan instal ulang dari PyPI. numpy<2 wajib karena
+# BasicSR/Real-ESRGAN belum kompatibel dengan numpy 2.x.
+# Versi di-pin (bukan >=) agar image worker reprodusibel; numpy<2 wajib
+# karena BasicSR/Real-ESRGAN belum kompatibel dengan numpy 2.x.
+gpu = [
+    "numpy>=1.26,<2",
+    "basicsr==1.4.2",
+    "realesrgan==0.3.0",
+    "facexlib==0.3.0",
+    "gfpgan==1.3.8",
+    "opencv-python-headless==4.9.0.80",
+]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

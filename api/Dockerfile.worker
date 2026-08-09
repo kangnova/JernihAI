@@ -1,0 +1,38 @@
+# Worker GPU — Real-ESRGAN via PyTorch CUDA (ADR-001/ADR-002).
+# Dipakai untuk deploy di Vast.ai / GPU cloud (bukan dev laptop).
+#
+# Build & jalankan:
+#   docker build -f Dockerfile.worker -t jernihai-worker .
+#   docker run --gpus all -e DATABASE_URL=... -e REDIS_URL=... jernihai-worker
+#
+# Catatan: base image pytorch sudah menyertakan torch+torchvision; extra
+# `gpu` di pyproject.toml TIDAK menginstal ulang torch dari PyPI.
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# System deps yang dibutuhkan opencv/realesrgan di container ramping.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY app ./app
+RUN pip install --no-cache-dir -e ".[gpu]"
+
+COPY scripts ./scripts
+COPY . .
+
+# Unduh weights Real-ESRGAN saat build -> worker langsung warm saat start.
+RUN python scripts/download_models.py
+
+# Pool `solo` aman untuk CUDA context (prd.md §9, DECISIONS.md ADR-001).
+CMD ["celery", "-A", "app.tasks.worker.celery_app", "worker", \
+     "--loglevel=info", "--pool=solo"]

@@ -47,5 +47,22 @@ class Settings(BaseSettings):
     # True = proses job inline tanpa Redis (dev lokal & test end-to-end).
     celery_task_always_eager: bool = False
 
+    # --- Enhance pipeline (Fase 2 — ADR-002: PyTorch + Real-ESRGAN) ---
+    # Pilihan backend: "auto" (real bila model tersedia, fallback mock),
+    # "real" (wajib model — gagal keras bila tidak tersedia), "mock".
+    enhance_backend: str = "auto"
+    model_dir: str = "storage/models"
+    realesrgan_model: str = "RealESRGAN_x4plus.pth"
+    # "auto" -> cuda bila tersedia, selain itu cpu.
+    model_device: str = "auto"
+    # Tiling mencegah OOM di GPU (prd.md §10: tile 400-512, tile_pad 10-32).
+    tile_size: int = 512
+    tile_pad: int = 10
+    pre_pad: int = 0
+    # FP16 hanya aktif di CUDA (tidak didukung CPU oleh RealESRGANer).
+    half_precision: bool = True
+    # Batas output sisi terpanjang (ADR-004: maks 7680×4320).
+    max_output_longest: int = 7680
+
 
 settings = Settings()

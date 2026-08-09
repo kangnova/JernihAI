@@ -1,7 +1,17 @@
-.venv
-__pycache__
-*.pyc
-.pytest_cache
-.ruff_cache
+# Jangan pernah membawa data user (storage/uploads, results) atau weights
+# ke dalam image — diprivasi (FR-07 / UU PDP). Weights diunduh saat build
+# worker GPU via scripts/download_models.py.
+.venv/
+venv/
+storage/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
 .env
-.git
+.env.*
+!.env.example
+.git/
+.gitignore
+*.log

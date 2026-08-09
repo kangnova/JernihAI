@@ -67,6 +67,37 @@ services:
       redis:
         condition: service_healthy
 
+  # Worker GPU produksi (Real-ESRGAN asli, PyTorch CUDA — ADR-001/002).
+  # Aktifkan saat deploy di GPU cloud (Vast.ai):
+  #   docker compose --profile gpu up -d --build worker-gpu
+  # Catatan: storage (uploads/results) & weights dibake ke image; untuk
+  # multi-node, pasang volume bersama atau Cloudflare R2 (prd.md §9).
+  worker-gpu:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.worker
+    profiles: ["gpu"]
+    command: celery -A app.tasks.worker.celery_app worker --loglevel=info --pool=solo
+    environment:
+      ENVIRONMENT: production
+      ENHANCE_BACKEND: real
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-jernihai}:${POSTGRES_PASSWORD:-jernihai}@db:5432/${POSTGRES_DB:-jernihai}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   web:
     build: ./web
     command: npm run dev

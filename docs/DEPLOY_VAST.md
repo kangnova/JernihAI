@@ -83,12 +83,13 @@ Web UI: **Rent** → filter GPU (T4 16GB atau RTX 4090, spot) → isi:
 | **Launch mode** | `ssh_direct` | Supaya bisa SSH. Entrypoint celery tidak auto-jalan (tidak masalah utk smoke test) |
 | **On-start (opsional)** | `env >> /etc/environment` | Agar env var kebawa ke sesi SSH |
 
-CLI (alternatif):
+CLI (alternatif) — beri label `smoke-test` agar pemantau biaya bisa
+auto-destroy dengan filter label (§5):
 
 ```bash
 vastai create instance <OFFER_ID> \
   --image <USER>/jernihai-worker:v0.1.0 \
-  --disk 60 --runtype ssh_direct
+  --disk 60 --runtype ssh_direct --label smoke-test
 ```
 
 ### A3. SSH & jalankan smoke test
@@ -139,6 +140,9 @@ Tombol **Destroy** di panel, atau:
 ```bash
 vastai destroy instance <INSTANCE_ID>
 ```
+
+> 🛡️ Agar tidak terlupakan: jalankan pemantau biaya `vast_cost_monitor.py`
+> selama instance hidup — bisa auto-destroy saat melewati ambang (§5).
 
 ---
 
@@ -197,9 +201,59 @@ bisa diuji end-to-end dari browser tanpa VPS terpisah. Biaya lebih tinggi
 
 ## 5. Checklist biaya (NFR-08: alert biaya cloud)
 
+**Pemantau otomatis** — `infra/vast/vast_cost_monitor.py` (mandiri, stdlib
+saja) membaca instance dari CLI `vastai` (atau API langsung dengan
+`--api-key`), menghitung umur & perkiraan biaya tiap instance
+(`dph_total × jam`), lalu **alert bila ada yang melewati ambang**:
+
+> 🔑 **API key:** skrip otomatis membaca `VAST_API_KEY` dari file `.env`
+> di root repo (sudah di-`.gitignore`) atau env. Jangan pernah commit key
+> — detail di GUIDE_VAST_ACCOUNT.md §5e.
+
+```bash
+# Cek sekali (exit code: 0 = aman, 2 = ada yang lewat ambang, 3 = destroy)
+python infra/vast/vast_cost_monitor.py --max-hours 1 --max-cost 2
+
+# Pantau terus di terminal — alert popup desktop + notifikasi HP via ntfy
+python infra/vast/vast_cost_monitor.py --watch --notify-desktop \
+  --ntfy-topic jernihai-gpu
+
+# Auto-destroy (dry-run dulu tanpa --yes; filter label 'smoke')
+python infra/vast/vast_cost_monitor.py --auto-destroy --label-contains smoke
+python infra/vast/vast_cost_monitor.py --auto-destroy --label-contains smoke --yes
+
+# Output JSON untuk skrip lain
+python infra/vast/vast_cost_monitor.py --json
+```
+
+- **Ambang default:** umur > 2 jam atau biaya > $5 (ubah dengan
+  `--max-hours` / `--max-cost`; `0` menonaktifkan).
+- **Channel alert:** popup desktop (`--notify-desktop`), ntfy.sh
+  (`--ntfy-topic`, bisa ke HP), webhook (`--webhook-url`, format
+  `{"text": ...}` cocok untuk Slack/Discord). Semua via env
+  `VAST_MONITOR_*` juga bisa.
+- **Keamanan auto-destroy:** wajib `--yes` (tanpa itu hanya dry-run), hanya
+  menyasar instance **aktif** yang lewat ambang, **tidak pernah** label
+  `prod` (kecuali `--allow-prod`), dan bisa dipersempit dengan
+  `--label-contains`. Beri label saat rent — field **Label** di Web UI
+  atau `--label smoke-test` di CLI (A2) — supaya filter ini efektif;
+  tanpa filter, auto-destroy menyasar semua instance yang lewat ambang.
+
+Integrasikan ke cron / Task Scheduler (cek tiap 15 menit):
+
+```bash
+# cron (Linux) — output hanya saat ada masalah; destroy otomatis instance 'smoke'
+*/15 * * * * cd /path/to/JernihAI && python infra/vast/vast_cost_monitor.py \
+  --quiet --auto-destroy --yes --label-contains smoke >> vast-monitor.log 2>&1
+```
+
+Checklist:
+
 - [ ] GPU spot (T4/4090), bukan on-demand — untuk tes sekali jalan
 - [ ] Durasi target < 1 jam (build di instance ≠ billing tinggi; GPU idle tetap
       ditagih → jangan biarkan instance nyala tanpa kerja)
-- [ ] **Destroy seketika** setelah hasil tercatat
+- [ ] **Destroy seketika** setelah hasil tercatat — atau biarkan
+      `vast_cost_monitor.py --auto-destroy` yang menanganinya
+- [ ] Jalankan pemantau (`vast_cost_monitor.py`) selama instance hidup
 - [ ] Catat hasil (inference time 4x 1080p, VRAM) ke DECISIONS.md / prd.md §12
       untuk memvalidasi cost model ±Rp 2–6/gambar

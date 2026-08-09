@@ -139,6 +139,30 @@ vastai ssh --instance-id <ID>                    # masuk SSH via CLI
 vastai destroy instance <ID>                     # ⚠️ matikan + stop billing
 ```
 
+**e. Keamanan API key (penting!) — di mana menyimpannya:**
+
+API key memberi akses penuh ke saldo & instance — perlakukan seperti
+password. **Jangan pernah commit/push.** Lokasi aman yang dipakai proyek
+ini (urut preferensi):
+
+1. **CLI** — `vastai set api-key <KEY>` → tersimpan di `~/.vastai/`
+   (**di luar repo**), otomatis dipakai semua perintah `vastai`.
+2. **`.env` root repo** (sudah di-`.gitignore`) — `VAST_API_KEY=<KEY>`;
+   skrip `infra/vast/vast_cost_monitor.py` auto-membacanya tanpa CLI.
+
+❌ **Jangan** simpan key di file teks di dalam folder repo (mis.
+`api-JernihAI.txt`) — berisiko ikut ter-commit saat `git add -A`.
+Hindari juga flag `--api-key <KEY>` di baris perintah (terlihat di Task
+Manager / process list) — pakai `.env` atau konfig CLI di atas.
+
+🔄 **Rotasi segera** bila key pernah ter-expose (tertulis polos di folder
+repo, terlihat pihak lain, dsb): `console.vast.ai/manage-keys` → API Keys →
+hapus yang lama → buat baru → update `.env`/CLI. Murah dan menghapus semua
+risiko sisa.
+
+✅ Sebelum push: `git status` — tidak boleh ada file berisi key
+(`.env`, `api-JernihAI*.txt`, dll).
+
 ---
 
 ## 6. Integrasi Penuh ke Proyek JernihAI (alur end-to-end)
@@ -194,12 +218,13 @@ Web UI **Rent** → filter GPU (T4/4090) → isi minimal:
 | **Launch mode** | `ssh_direct` |
 | **On-start** | `env >> /etc/environment` (opsional, biar env kebawa SSH) |
 
-Atau via CLI:
+Atau via CLI (beri label — berguna untuk filter auto-destroy pemantau biaya,
+DEPLOY_VAST.md §5):
 
 ```bash
 vastai search offers 't4' --limit 10          # catat OFFER_ID yang spot
 vastai create instance <OFFER_ID> --image <USER>/jernihai-worker:v0.1.0 \
-  --disk 60 --runtype ssh_direct \
+  --disk 60 --runtype ssh_direct --label smoke-test \
   --onstart "env >> /etc/environment"
 ```
 
@@ -243,6 +268,12 @@ Billing per detik — instance yang nyala tanpa kerja tetap ditagih.
   dibagikan atau dimasukkan ke env repo.
 - 💡 Aktifkan autobilling atau pantau saldo agar storage tak hilang saat
   saldo $0.
+- 🛡️ **Pasang pemantau biaya (NFR-08)** — skrip mandiri
+  `infra/vast/vast_cost_monitor.py` (stdlib saja, tanpa dependency)
+  menampilkan umur & perkiraan biaya tiap instance, memberi **alert**
+  (popup desktop, notifikasi HP via ntfy.sh, atau webhook) bila melewati
+  ambang, dan bisa **auto-destroy** agar instance yang selesai dipakai tidak
+  terlupakan. Cara pakai + contoh cron: **DEPLOY_VAST.md §5**.
 
 ---
 

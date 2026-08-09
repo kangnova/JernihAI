@@ -11,6 +11,11 @@ __pycache__/
 .env.*.local
 !.env.example
 
+# API key Vast.ai dalam teks polos — JANGAN pernah commit.
+# Simpan di .env (di atas) atau di luar repo (~/.vastai, Credential Manager).
+api-JernihAI*.txt
+*.vastai-key*
+
 # --- next.js ---
 .next/
 out/

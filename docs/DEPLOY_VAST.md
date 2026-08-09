@@ -30,8 +30,8 @@ harga termurah untuk tes sekali jalan (T4 spot ~$0,12–0,15/jam; 4090
 ### A1. Bangun & push image worker
 
 > 🤖 **Otomatis via CI (disarankan):** GitHub Actions
-> (`.github/workflows/release-worker.yml`) sudah build + push image saat tag
-> rilis dibuat — cukup:
+> (`.github/workflows/release-images.yml`) sudah build + push image worker
+> (juga api & web) ke Docker Hub saat tag rilis dibuat — cukup:
 >
 > ```bash
 > git tag v0.1.0 && git push origin v0.1.0

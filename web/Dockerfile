@@ -11,6 +11,11 @@ RUN npm ci
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# URL API produksi di-bake ke bundle client saat build (NEXT_PUBLIC_*).
+# Di-set dari workflow release via variabel repo NEXT_PUBLIC_API_URL;
+# default dev tetap aman untuk build lokal / compose.
+ARG NEXT_PUBLIC_API_URL="http://localhost:8000"
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build
 
 FROM base AS runner

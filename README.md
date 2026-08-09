@@ -12,6 +12,7 @@ Monorepo platform web untuk peningkatan kualitas foto/gambar (super-resolution, 
 | `scripts/` | Util dev — generator set uji gambar (stdlib-only) |
 | `samples/` | Set uji gambar sintetis (hasil generate script) |
 | `DECISIONS.md` | Log keputusan arsitektur Fase 0 (ADR ringan) |
+| `docs/DEPLOY_VAST.md` | Runbook deploy & smoke test worker GPU di Vast.ai |
 
 ## Quickstart (Docker)
 
@@ -59,3 +60,4 @@ cd web && npm run lint && npx tsc --noEmit
 - Laptop dev (AMD A8-7410, **tanpa AVX2**) **tidak bisa menjalankan ONNX Runtime**. Semua inference ML dilarang berjalan lokal — gunakan **Google Colab** untuk uji model dan **GPU cloud** untuk produksi.
 - Worker GPU (Celery + model) hanya dijalankan di mesin ber-GPU; container `worker` memakai pool `solo` (aman untuk CUDA context).
 - Set uji gambar sintetis: `python scripts/make_test_images.py` (tanpa dependensi ML, aman di laptop).
+- **Deploy Real-ESRGAN ke GPU:** lihat [docs/DEPLOY_VAST.md](./docs/DEPLOY_VAST.md) — build/push image worker, smoke test 4x 1080p, ukur KPI NFR-01.

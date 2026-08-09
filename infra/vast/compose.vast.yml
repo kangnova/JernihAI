@@ -1,0 +1,13 @@
+# Override untuk full-stack E2E pada SATU instance Vast.ai (Opsi B).
+# Memberi worker-gpu bind mount ./api:/app agar berbagi storage
+# (uploads/results/weights) dengan service api — lihat docs/DEPLOY_VAST.md.
+#
+#   docker compose -f docker-compose.yml -f infra/vast/compose.vast.yml \
+#     --profile gpu up -d --build
+#
+# Catatan: compose me-resolve path relatif override terhadap file compose
+# PERTAMA (docker-compose.yml di root repo), jadi `./api` = <root>/api.
+services:
+  worker-gpu:
+    volumes:
+      - ./api:/app

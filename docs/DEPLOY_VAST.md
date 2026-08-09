@@ -27,6 +27,19 @@ harga termurah untuk tes sekali jalan (T4 spot ~$0,12–0,15/jam; 4090
 
 ### A1. Bangun & push image worker
 
+> 🤖 **Otomatis via CI (disarankan):** GitHub Actions
+> (`.github/workflows/release-worker.yml`) sudah build + push image saat tag
+> rilis dibuat — cukup:
+>
+> ```bash
+> git tag v0.1.0 && git push origin v0.1.0
+> ```
+>
+> Hasil: `<USER>/jernihai-worker:v0.1.0` di Docker Hub. Wajib set secrets
+> `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` di repo (Settings → Secrets).
+> Jalur manual di bawah hanya untuk kasus khusus (image pribadi, branch
+> eksperimen, laptop ingin build sendiri).
+
 ```bash
 docker build -f api/Dockerfile.worker -t <USER>/jernihai-worker:v0.1.0 api
 docker login

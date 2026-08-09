@@ -2,7 +2,10 @@
 name = "jernihai-api"
 version = "0.1.0"
 description = "JernihAI — Backend API (FastAPI) untuk platform peningkatan kualitas gambar"
-requires-python = ">=3.12"
+# >=3.11 (bukan >=3.12): base image worker GPU pytorch/pytorch:2.5.1
+# resmi membawa Python 3.11 (conda); basicsr 1.4.2 (2023) tidak kompatibel
+# dgn Python 3.12 (distutils dihapus). API CPU tetap jalan di 3.12.
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.34.0",
@@ -34,13 +37,17 @@ dev = [
 # BasicSR/Real-ESRGAN belum kompatibel dengan numpy 2.x.
 # Versi di-pin (bukan >=) agar image worker reprodusibel; numpy<2 wajib
 # karena BasicSR/Real-ESRGAN belum kompatibel dengan numpy 2.x.
+# opencv-python (BUKAN -headless): basicsr/realesrgan/gfpgan semuanya
+# me-declare opencv-python sebagai dependency; memaksa headless berujung
+# konflik file saat pip install. libgl1/libglib2.0-0 di Dockerfile.worker
+# sudah meng-cover kebutuhan runtime opencv-python non-headless.
 gpu = [
     "numpy>=1.26,<2",
     "basicsr==1.4.2",
     "realesrgan==0.3.0",
     "facexlib==0.3.0",
     "gfpgan==1.3.8",
-    "opencv-python-headless==4.9.0.80",
+    "opencv-python==4.9.0.80",
 ]
 
 [build-system]

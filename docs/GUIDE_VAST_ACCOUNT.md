@@ -43,16 +43,40 @@ key (§4) → (opsional) pasang CLI (§5) → rent instance (§6).
 
 ## 3. Isi Saldo (Billing)
 
-Vast.ai **tidak punya free tier / trial credits** — minimal deposit **$5**
-untuk mulai menyewa.
+### 3a. Cek saldo & kredit dulu (mungkin TIDAK perlu deposit)
 
-1. Di sidebar konsol → **Billing**.
+Sebelum deposit, cek apakah akunmu sudah punya **kredit promo** yang bisa
+langsung dipakai untuk sewa (banyak akun baru menerima **$10 credit**):
+
+```bash
+vastai show user
+# Perhatikan dua kolom:
+#   Balance  -> saldo tunai/deposit (0 = belum ada deposit)
+#   Credit   -> kredit promo/bonus (mis. 10.00 = $10 siap pakai)
+```
+
+> ✅ Status akun proyek ini (Agustus 2026): `Balance = 0`,
+> `Credit = 10.00`, `Billing Creditonly = 1`. Artinya kredit $10 tersedia
+> dan akun dibatasi hanya memakai kredit (tanpa auto-charge kartu) —
+> **langsung lanjut ke §6 (sewa) tanpa deposit**. Bila `create instance`
+> gagal dengan pesan saldo tidak cukup, baru lanjut deposit di §3b.
+>
+> ℹ️ Kredit promo **tidak bisa ditarik kembali** (hanya untuk dipakai
+> sewa/storage); begitu habis dan saldo $0, instance otomatis berhenti.
+
+### 3b. Deposit manual (hanya bila perlu)
+
+Vast.ai **tidak punya free tier** — untuk top-up, minimal deposit **$5**
+(beberapa metode menetapkan $10; UI akan menampilkan minimum saat
+checkout).
+
+1. Di sidebar konsol → **Billing** (atau buka `console.vast.ai/billing`).
 2. Klik **Add Credit** (atau *Add Credits*).
 3. Pilih metode:
    - **Kartu kredit** — diproses Stripe (Vast tidak menyimpan nomor kartu).
    - **Kripto** — via BitPay / Crypto.com (⚠️ deposit kripto **tidak dapat
      dikembalikan**/non-refundable).
-4. Masukkan nominal (min. $5) → selesaikan transaksi.
+4. Masukkan nominal (min. $5–$10) → selesaikan transaksi.
 
 > 💡 **Aktifkan autobilling** (simpan kartu → top-up otomatis saat saldo di
 > bawah ambang). Tanpa backup pembayaran, instance **otomatis di-terminate
@@ -279,7 +303,10 @@ Billing per detik — instance yang nyala tanpa kerja tetap ditagih.
 
 ## 8. FAQ
 
-**Apakah ada free tier / trial?** Tidak. Minimal deposit $5.
+**Apakah ada free tier / trial?** Tidak ada free tier tetap, tapi banyak akun
+baru menerima **kredit promo $10** yang langsung bisa dipakai untuk sewa
+(cek `vastai show user` → kolom `Credit`). Minimal deposit $5–$10 bila
+perlu top-up.
 
 **Kartu kredit wajib?** Hampir selalu untuk membuka akses penuh; alternatif
 via kripto (BitPay/Crypto.com, non-refundable).
@@ -288,7 +315,9 @@ via kripto (BitPay/Crypto.com, non-refundable).
 Real-ESRGAN x4, tiling 512). 4090 hanya bila mau bukti waktu tercepat.
 
 **Kalau saldo habis saat instance nyala?** Instance + storage langsung
-di-terminate otomatis. Simpan hasil sebelum saldo kritis.
+di-terminate otomatis. Simpan hasil sebelum saldo kritis. Kredit promo yang
+habis juga tidak bisa di-top-up secara manual — deposit baru (§3b) bila
+perlu lanjut.
 
 **Repo image privat di Docker Hub, gimana?** Jalankan `docker login` di
 instance dengan akun pemilik namespace. Publik cukup pull tanpa login.

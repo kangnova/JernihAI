@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
+import { JobUploader } from "@/components/JobUploader";
 import { useAuth } from "@/lib/auth";
 
 export default function DashboardPage() {
@@ -23,7 +24,7 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
-      <nav className="mx-auto flex max-w-4xl items-center justify-between px-6 py-6">
+      <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 py-6">
         <div className="flex items-center gap-2 font-semibold">
           <span className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-sm font-bold">
             J
@@ -41,31 +42,16 @@ export default function DashboardPage() {
         </button>
       </nav>
 
-      <section className="mx-auto max-w-4xl px-6 pt-12 text-center">
-        <h1 className="text-3xl font-bold">Halo, {user.name ?? user.email} 👋</h1>
-        <p className="mt-3 text-slate-400">
-          Dashboard ini masih kosong — fitur upload & peningkatan gambar
-          menyusul di milestone berikutnya Fase 1.
-        </p>
-        <div className="mx-auto mt-8 max-w-md rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-left">
-          <h2 className="text-sm font-semibold uppercase tracking-widest text-slate-400">
-            Akun kamu
-          </h2>
-          <dl className="mt-4 space-y-3 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-slate-400">Email</dt>
-              <dd>{user.email}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-400">Nama</dt>
-              <dd>{user.name ?? "—"}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-400">Login via</dt>
-              <dd className="capitalize">{user.provider}</dd>
-            </div>
-          </dl>
+      <section className="mx-auto max-w-5xl px-6 pt-10">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold">Halo, {user.name ?? user.email} 👋</h1>
+          <p className="mt-2 text-slate-400">
+            Unggah gambar dan tingkatkan kualitasnya — gratis 3 gambar per
+            hari.
+          </p>
         </div>
+
+        <JobUploader />
       </section>
     </main>
   );

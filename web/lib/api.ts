@@ -77,3 +77,65 @@ export async function logoutUser(): Promise<void> {
 export function googleLoginUrl(): string {
   return `${API_URL}/api/v1/auth/google`;
 }
+
+// --- Jobs (FR-02/03/05) ---
+
+export type JobStatus = "queued" | "processing" | "completed" | "failed";
+
+export interface Job {
+  id: string;
+  status: JobStatus;
+  scale: number;
+  output_format: "webp" | "jpeg" | "png";
+  original_name: string;
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export async function createJob(input: {
+  file: File;
+  scale: number;
+  outputFormat: Job["output_format"];
+}): Promise<Job> {
+  const form = new FormData();
+  form.append("file", input.file);
+  form.append("scale", String(input.scale));
+  form.append("output_format", input.outputFormat);
+
+  const res = await fetch(`${API_URL}/api/v1/jobs`, {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+
+  if (!res.ok) {
+    let detail = "Upload gagal";
+    try {
+      const data = await res.json();
+      detail = data.detail ?? detail;
+    } catch {
+      // body bukan JSON
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return (await res.json()) as Job;
+}
+
+export async function getJob(jobId: string): Promise<Job> {
+  return apiFetch<Job>(`/api/v1/jobs/${jobId}`);
+}
+
+export async function fetchJobResult(jobId: string): Promise<Blob> {
+  const res = await fetch(`${API_URL}/api/v1/jobs/${jobId}/download`, {
+    credentials: "include",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "Gagal mengunduh hasil");
+  }
+  return res.blob();
+}
+
+export function jobDownloadUrl(jobId: string): string {
+  return `${API_URL}/api/v1/jobs/${jobId}/download`;
+}

@@ -228,10 +228,10 @@ vastai show instances   # instance tidak muncul lagi
 
 ## 9. Catat hasil & evaluasi
 
-- [ ] Inference warm 4x 1080p (< 15 s = **OK** per NFR-01)
-- [ ] Total biaya sesi (lihat `vastai show user` → saldo sebelum/sesudah)
-- [ ] Update `DECISIONS.md` / prd.md §12 dengan angka nyata untuk
-      memvalidasi cost model ±Rp 2–6/gambar (NFR-08)
+- [x] Inference warm 4x 1080p — **10,38 s** (RTX 3060, < 15 s = **OK** per NFR-01)
+- [x] Total biaya sesi — **±$0,02** (credit 10,000 → 9,979; rent ~30 mnt, 5 iterasi)
+- [x] Update `DECISIONS.md` / prd.md §12 — angka nyata tercatat, cost model
+      ±Rp 2–6/gambar terkonfirmasi (NFR-08 ✅)
 
 ---
 

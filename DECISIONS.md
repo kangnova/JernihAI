@@ -12,6 +12,7 @@ Format: ADR ringan. Status: `proposed` (belum dieksekusi) / `accepted` / `supers
   - Serverless: Modal T4 ~$0,59/jam (+$30/bln free credit); Replicate T4 ~$0,81/jam; cold start 2–60 dtk — berisiko melanggar KPI end-to-end < 60 dtk tanpa warm pool.
 - **Keputusan:** **long-running worker Celery di Vast.ai on-demand (1× T4 atau RTX 4090)** — model selalu warm (tanpa cold start), retry & queue prioritas native (Celery/Redis), kontrol biaya via idle-timeout/auto-pause instance. Ini menurunkan cost model PRD §12 dari ±Rp 15–25 menjadi **±Rp 2–6/gambar**.
 - **Konsekuensi:** pengelolaan instance manual (perlu runbook); ketersediaan Vast.ai fluktuatif → **RunPod Secure Cloud sebagai fallback**; spot hanya untuk benchmark. **Serverless (Modal/Replicate)** dievaluasi ulang di Fase 3 untuk API B2B & spike.
+- **Validasi aktual (smoke test GPU pertama — Agustus 2026):** RTX 3060 12 GB (Vast.ai spot, Korea; `dph_total` aktual **$0,037/jam**) — warm inference 4x 1080p **10,38 s** (KPI NFR-01 < 15 s ✅); biaya sesi uji penuh (rent ~30 mnt + 5 iterasi + load model + encode WebP) **±$0,02**; estimasi biaya GPU per gambar ≈ **$0,0001 → ±Rp 1,8/gambar** (@ Rp 16.500/USD) — **cost model ±Rp 2–6/gambar (prd.md §12 / NFR-08) terkonfirmasi** ✅. Catatan: T4 tidak tersedia di market saat sesi → RTX 3060 sebagai pengganti (realita ketersediaan Vast.ai; fallback RunPod tetap relevan).
 
 ## ADR-002: Runtime Model (ONNX Runtime vs PyTorch 2.x)
 
@@ -23,6 +24,7 @@ Format: ADR ringan. Status: `proposed` (belum dieksekusi) / `accepted` / `supers
   - VRAM dengan tiling 400–512 px: < 6–8 GB → aman di T4 16GB.
 - **Keputusan:** pipeline Fase 1 = **PyTorch 2.x + RealESRGANer** (tiling + FP16 tetap wajib). Benchmark ONNX hanya jika dibutuhkan di Fase 2/3.
 - **Konsekuensi:** image worker lebih besar (`pytorch/pytorch:2.x-cuda12.x` + `basicsr`/`facexlib`/`gfpgan`); butuh system deps OpenCV di container (`libgl1-mesa-glx`, `libglib2.0-0`); mock pipeline lokal (stub OpenCV resize) tidak berubah (PRD §12).
+- **Validasi aktual:** runtime PyTorch + `RealESRGANer` (tiling + FP16) terverifikasi di GPU nyata — 10,38 s warm 4x 1080p, VRAM RTX 3060 12 GB cukup, output 7680×4320 tanpa OOM. Ditemukan incompatibility **basicsr 1.4.2 vs torchvision modern** (`functional_tensor` dihapus) → patch permanen `api/scripts/patch_basicsr.py` (dipanggil di Dockerfile.worker saat build, teruji unit: PATCHED/idempoten/SKIP).
 
 ## ADR-003: Auth (NextAuth vs Clerk)
 
@@ -49,3 +51,4 @@ Format: ADR ringan. Status: `proposed` (belum dieksekusi) / `accepted` / `supers
   - **PNG lossless** hanya atas permintaan eksplisit, dengan warning ukuran; **dibatasi ≤ 4096 px** sisi terpanjang (8K PNG tidak didukung default).
   - **Batas output:** maks 7680×4320 (8K) untuk format lossy; ditetapkan sebagai konstanta pipeline.
 - **Konsekuensi:** worker menambah langkah encode WebP (beban CPU kecil di GPU instance; **jangan gunakan WebP lossless** — 6× lebih lambat); storage R2 tetap kecil selama retensi 7–30 hari.
+- **Validasi aktual (GPU, Agustus 2026):** encode WebP q90 output 8K (7680×4320) = **0,48 MB** dalam 2,98 s di RTX 3060 — konsisten dengan benchmark Pillow (rasio ±15× vs PNG); konfirmasi default WebP aman untuk output 8K di pipeline produksi.

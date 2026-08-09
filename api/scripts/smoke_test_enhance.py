@@ -80,7 +80,8 @@ def main() -> int:
         print(f"   GPU           : {props.name} ({props.total_memory / 1e9:.1f} GB)")
         free, _ = torch.cuda.mem_get_info()
         print(f"   VRAM bebas    : {free / 1e9:.1f} GB")
-    print(f"   tile          : {upsampler.tile} (tile_pad={upsampler.tile_pad})")
+    # realesrgan 0.3.0 menamai atribut tile sebagai `tile_size`
+    print(f"   tile          : {upsampler.tile_size} (tile_pad={upsampler.tile_pad})")
     print(f"   half (FP16)   : {upsampler.half}")
     print(f"   load model    : {load_s:.2f} s")
 

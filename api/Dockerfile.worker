@@ -25,21 +25,14 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --no-cache-dir -e ".[gpu]"
-
-# Patch kompatibilitas basicsr 1.4.2 vs torchvision >=0.17: modul
-# `torchvision.transforms.functional_tensor` dihapus dari torchvision;
-# `rgb_to_grayscale` kini ada di `torchvision.transforms.functional`.
-# Tanpa patch ini import basicsr gagal saat runtime (ditemukan saat smoke
-# test GPU pertama). Lokasi file dicari via Python agar tahan perubahan
-# path site-packages.
-RUN DEG=$(python -c "import basicsr, os; \
-    print(os.path.join(os.path.dirname(basicsr.__file__), 'data', 'degradations.py'))") \
-    && sed -i \
-    's|from torchvision.transforms.functional_tensor import rgb_to_grayscale|from torchvision.transforms.functional import rgb_to_grayscale|' \
-    "$DEG" \
-    && python -c "import basicsr.data.degradations; print('patch basicsr OK:', \
-    '$DEG')"
+COPY scripts/patch_basicsr.py ./patch_basicsr.py
+RUN pip install --no-cache-dir -e ".[gpu]" \
+    # basicsr 1.4.2 vs torchvision >=0.17: modul functional_tensor dihapus;
+    # patch ini mencegah ImportError runtime (ditemukan saat smoke test GPU
+    # pertama). Script SKIP aman bila basicsr tidak terpasang.
+    && python patch_basicsr.py \
+    && python -c "import basicsr.data.degradations; print('import basicsr.data.degradations OK')" \
+    && rm patch_basicsr.py
 
 COPY scripts ./scripts
 COPY . .

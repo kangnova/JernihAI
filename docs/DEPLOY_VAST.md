@@ -17,8 +17,10 @@ harga termurah untuk tes sekali jalan (T4 spot ~$0,12–0,15/jam; 4090
 
 - Akun [Vast.ai](https://vast.ai) + SSH key dipasang:
   `Settings → Keys → tambahkan isi `id_ed25519.pub`.
-- Akun [Docker Hub](https://hub.docker.com) (untuk push image). Tidak wajib
-  bila memilih build langsung di instance (Opsi A1b).
+- Akun [Docker Hub](https://hub.docker.com) — namespace image + token CI
+  (secrets `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`, lihat A1). Login di
+  instance hanya wajib bila repo image **privat**; repo publik cukup
+  `docker pull` tanpa login.
 - Repo sudah dipush (di `origin/main`).
 
 ---
@@ -47,18 +49,28 @@ docker push <USER>/jernihai-worker:v0.1.0
 ```
 
 > ⚠️ Base image `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime` ~8 GB — di
-> laptop A8 pull-nya lama (sekali saja). Kalau terlalu berat, lihat **A1b**.
+> laptop A8 pull-nya lama (sekali saja). Kalau terlalu berat (atau ingin
+> tanpa build sama sekali), lihat **A1b**.
 
-### A1b. Alternatif: build langsung di instance (disarankan bila laptop lambat)
+### A1b. Tanpa build di mana pun: tarik image hasil CI dari Docker Hub
 
-Instance Vast punya bandwidth + disk besar. Rent instance murah dulu
-(`ssh_direct`), lalu:
+Kalau CI sudah menghasilkan image (lihat kotak **Otomatis via CI** di A1),
+instance Vast **tidak perlu clone repo, build, maupun push** — cukup tarik
+image yang sudah ada di Docker Hub:
 
 ```bash
-git clone https://github.com/kangnova/JernihAI.git && cd JernihAI
-docker build -f api/Dockerfile.worker -t <USER>/jernihai-worker:v0.1.0 api
-docker login && docker push <USER>/jernihai-worker:v0.1.0
+docker pull <USER>/jernihai-worker:v0.1.0
 ```
+
+- Pull di instance Vast sangat cepat (bandwidth datacenter), jauh lebih
+  ringan daripada build (base pytorch ~8 GB + kompilasi `basicsr` dari
+  source) dan tidak menyentuh laptop sama sekali.
+- Repo image **privat**: jalankan `docker login` dulu dengan akun pemilik
+  namespace `<USER>`. Repo **publik**: pull tanpa login.
+- Saat rent (A2), field **Image** `<USER>/jernihai-worker:v0.1.0` memakai
+  image yang sama — Vast menariknya langsung saat instance dibuat.
+- Ingin menguji **branch yang belum di-tag** (belum dirilis)? Baru pakai
+  build manual di §A1.
 
 ### A2. Rent instance
 

@@ -2,16 +2,22 @@
 """Pantau umur & biaya instance Vast.ai; alert bila lupa di-destroy.
 
 Skrip mandiri (stdlib saja, tanpa dependency) untuk memenuhi NFR-08
-(alert biaya cloud): menampilkan semua instance dengan perkiraan biaya
-terkumpul, memberi peringatan bila umur/biaya melewati ambang, dan
-(opsional) auto-destroy supaya instance GPU yang selesai dipakai tidak
-terlupakan (billing Vast per detik — instance nyala tanpa kerja tetap
-ditagih).
+(alert biaya cloud):
+  * menampilkan semua instance dengan perkiraan biaya terkumpul, memberi
+    peringatan bila umur/biaya melewati ambang, dan (opsional) auto-destroy
+    supaya instance GPU yang selesai dipakai tidak terlupakan (billing Vast
+    per detik — instance nyala tanpa kerja tetap ditagih);
+  * memantau **saldo/kredit akun** dan mengirim alert (ntfy / webhook /
+    desktop) bila kredit total (credit + balance) turun di bawah ambang
+    ``--min-credit`` — supaya tidak kehabisan kredit di tengah pekerjaan
+    (mis. sewa instance mati mendadak saat kredit habis).
 
 Sumber data (prioritas):
   1. CLI ``vastai`` (default)   -> ``vastai show instances --raw``
+                                -> ``vastai show user --raw`` (saldo/kredit)
   2. API langsung ``--api-key`` -> ``GET {api-url}/api/v1/instances`` (Bearer)
-     (v0 sudah dihapus Vast — HTTP 410, 2026)
+                                -> ``GET {api-url}/api/v0/users/current/``
+     (v0 instances sudah dihapus Vast — HTTP 410, 2026; v0 users masih ada)
 
 API key dibaca dari (prioritas): flag ``--api-key`` > env ``VAST_API_KEY``
 > file ``.env`` di root repo (auto-load, tanpa dependency). Jangan pernah
@@ -24,16 +30,16 @@ Cara pakai:
     python infra/vast/vast_cost_monitor.py --json         # output skrip lain
     python infra/vast/vast_cost_monitor.py --auto-destroy --label-contains smoke
     python infra/vast/vast_cost_monitor.py --auto-destroy --label-contains smoke --yes
+    python infra/vast/vast_cost_monitor.py --min-credit 2 --ntfy-topic jernihai-gpu
 
 Exit code (untuk cron / Task Scheduler):
     0 = aman (tidak ada yang melewati ambang)
     1 = error runtime (CLI/API tidak bisa dipanggil)
-    2 = ada instance melewati ambang (alert terkirim)
+    2 = perlu perhatian: instance melewati ambang ATAU kredit di bawah ambang
     3 = ada instance di-destroy, atau destroy diminta (dry-run)
 
 Catatan: usage error argparse juga exit 2 — di cron, perhatikan stderr untuk
-membedakan dari breach sungguhan.
-"""
+membedakan dari breach sungguhan."""
 
 from __future__ import annotations
 
@@ -95,6 +101,25 @@ def _to_epoch(value) -> float | None:
         except ValueError:
             return None
     return float(value) if isinstance(value, (int, float)) else None
+
+
+@dataclass
+class Account:
+    """Saldo akun Vast.ai: kredit promo + balance tunai (dolar)."""
+
+    credit: float
+    balance: float
+
+    @property
+    def total(self) -> float:
+        return self.credit + self.balance
+
+
+def _to_f(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def analyze(instances: list[dict], max_hours: float, max_cost: float) -> list[Row]:
@@ -203,6 +228,64 @@ def load_instances(args: argparse.Namespace) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Pengambilan data: saldo/kredit akun
+# ---------------------------------------------------------------------------
+def fetch_account_cli(cli: str) -> Account | None:
+    """Saldo dari CLI: `vastai show user` — coba --raw lalu --json."""
+    for flag in ("--raw", "--json"):
+        try:
+            out = subprocess.run(
+                [cli, "show", "user", flag],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if out.returncode != 0:
+            continue
+        try:
+            data = json.loads(out.stdout)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        user = data.get("user", data) if isinstance(data.get("user"), dict) else data
+        return Account(_to_f(user.get("credit")), _to_f(user.get("balance")))
+    return None
+
+
+def fetch_account_api(api_key: str, base: str) -> Account | None:
+    """Saldo dari API publik v0 (users/current) — Bearer header saja.
+
+    Kunci tidak pernah dicetak di pesan error; URL ditampilkan ter-redact.
+    Gagal (network/HTTP/format) => None — monitoring instance tetap jalan.
+    """
+    url = f"{base}/api/v0/users/current/"
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    user = data.get("user", data) if isinstance(data.get("user"), dict) else data
+    return Account(_to_f(user.get("credit")), _to_f(user.get("balance")))
+
+
+def load_account(args: argparse.Namespace) -> Account | None:
+    """Saldo akun via jalur yang sama dengan instance (API > CLI)."""
+    if args.api_key:
+        return fetch_account_api(args.api_key, args.api_url)
+    cli = shutil.which(args.cli)
+    return fetch_account_cli(cli) if cli else None
+
+
+# ---------------------------------------------------------------------------
 # Tampilan
 # ---------------------------------------------------------------------------
 def _out(args: argparse.Namespace):
@@ -298,6 +381,26 @@ def _http_post(url: str, data: bytes, headers: dict[str, str]) -> bool:
         return False
 
 
+def _notify(args: argparse.Namespace, title: str, msg: str) -> bool:
+    """Kirim ke semua channel aktif; True bila minimal satu channel berhasil."""
+    sent = False
+    if args.ntfy_topic:
+        sent = _http_post(
+            f"https://ntfy.sh/{args.ntfy_topic}",
+            msg.encode("utf-8"),
+            {"Title": title, "Priority": "high", "Tags": "rotating_light"},
+        ) or sent
+    if args.webhook_url:
+        sent = _http_post(
+            args.webhook_url,
+            json.dumps({"text": f"{title}\n{msg}"}).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        ) or sent
+    if args.notify_desktop:
+        sent = desktop_notify(title, msg) or sent
+    return sent
+
+
 def send_alerts(rows: list[Row], args: argparse.Namespace) -> None:
     """Kirim alert untuk instance yang melewati ambang (dengan cooldown)."""
     fresh = [r for r in rows if r.breaches and r.active]
@@ -318,25 +421,34 @@ def send_alerts(rows: list[Row], args: argparse.Namespace) -> None:
     msg = "\n".join(lines)
     print(msg, file=_out(args))
 
-    sent = False
-    if args.ntfy_topic:
-        sent = _http_post(
-            f"https://ntfy.sh/{args.ntfy_topic}",
-            msg.encode("utf-8"),
-            {"Title": title, "Priority": "high", "Tags": "rotating_light"},
-        ) or sent
-    if args.webhook_url:
-        sent = _http_post(
-            args.webhook_url,
-            json.dumps({"text": f"{title}\n{msg}"}).encode("utf-8"),
-            {"Content-Type": "application/json"},
-        ) or sent
-    if args.notify_desktop:
-        sent = desktop_notify(title, msg) or sent
-    if sent:
+    if _notify(args, title, msg):
         for r in due:
             state[str(r.instance_id)] = now
         _state_save(args.state_file, state)
+
+
+def send_credit_alert(acc: Account, args: argparse.Namespace) -> bool:
+    """Alert bila kredit total di bawah --min-credit (cooldown via state).
+
+    Key state terpisah ("credit") dari cooldown per-instance; mengembalikan
+    True bila alert benar-benar terkirim ke minimal satu channel.
+    """
+    state = _state_load(args.state_file)
+    now = time.time()
+    if now - state.get("credit", 0.0) < args.cooldown:
+        return False
+    title = "⚠ Vast.ai: kredit menipis"
+    msg = (
+        f"Kredit total ${acc.total:.2f} (credit ${acc.credit:.2f} + balance "
+        f"${acc.balance:.2f}) DI BAWAH ambang ${args.min_credit:.2f}. "
+        "Top up saldo atau hentikan instance agar sewa tidak mati mendadak."
+    )
+    print(msg, file=_out(args))
+    if _notify(args, title, msg):
+        state["credit"] = now
+        _state_save(args.state_file, state)
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +527,7 @@ def maybe_destroy(rows: list[Row], args: argparse.Namespace) -> bool:
 def run_check(args: argparse.Namespace) -> int:
     instances = load_instances(args)
     rows = analyze(instances, args.max_hours, args.max_cost)
+
     if args.json:
         print(json.dumps([r.to_json() for r in rows], indent=2))
     elif not args.quiet:
@@ -422,22 +535,49 @@ def run_check(args: argparse.Namespace) -> int:
             f"Vast.ai — {datetime.now(UTC).strftime('%H:%M:%S UTC')} "
             f"(ambang: umur >{args.max_hours or 'off'} jam, biaya >${args.max_cost or 'off'})"
         )
+
+    credit_breach = False
+    if args.min_credit > 0:
+        acc = load_account(args)
+        if acc is None:
+            print(
+                "Peringatan: tidak bisa membaca saldo/kredit Vast.ai "
+                "(cek CLI 'vastai' atau --api-key) — alert kredit dilewati.",
+                file=sys.stderr,
+            )
+        else:
+            credit_breach = acc.total < args.min_credit
+            # Baris kredit tampil setelah header run (--json hanya berisi array
+            # instance; kredit tetap ada di alert). Hindari emoji/karakter
+            # non-ASCII di console (Windows cp1252 crash saat stdout di-pipe) —
+            # emoji hanya di payload alert.
+            if not args.json and not args.quiet:
+                status = "DI BAWAH AMBANG" if credit_breach else "OK"
+                print(
+                    f"Kredit: credit ${acc.credit:.2f} + balance ${acc.balance:.2f} "
+                    f"= total ${acc.total:.2f} (ambang <${args.min_credit:.2f}) [{status}]"
+                )
+
+    if not args.json and not args.quiet:
         render_table(rows)
 
     breached = [r for r in rows if r.breaches and r.active]
-    if not breached:
-        return 0
-    send_alerts(rows, args)
-    if not args.auto_destroy:
-        return 2
-    actioned = maybe_destroy(rows, args)
-    return 3 if actioned else 2
+    if credit_breach:
+        send_credit_alert(acc, args)
+    if breached:
+        send_alerts(rows, args)
+        if not args.auto_destroy:
+            return 2
+        actioned = maybe_destroy(rows, args)
+        return 3 if actioned else 2
+    return 2 if credit_breach else 0
 
 
 def watch(args: argparse.Namespace) -> int:
+    credit_note = f", kredit <${args.min_credit:.2f}" if args.min_credit > 0 else ""
     print(
         f"Memantau tiap {args.interval} s — ambang: umur >{args.max_hours or 'off'} jam, "
-        f"biaya >${args.max_cost or 'off'}. Ctrl+C untuk berhenti."
+        f"biaya >${args.max_cost or 'off'}{credit_note}. Ctrl+C untuk berhenti."
     )
     while True:
         try:
@@ -508,6 +648,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Alert bila biaya > $N (default 5.0; 0 = mati). Env VAST_MONITOR_MAX_COST",
     )
+    p.add_argument(
+        "--min-credit",
+        type=float,
+        default=None,
+        help="Alert bila kredit total (credit+balance) < $N (default 2.0; 0 = mati). "
+        "Env VAST_MONITOR_MIN_CREDIT",
+    )
     p.add_argument("--watch", action="store_true", help="Pantau terus (loop)")
     p.add_argument("--interval", type=int, default=300, help="Interval watch, detik (default 300)")
     p.add_argument("--json", action="store_true", help="Output JSON ke stdout")
@@ -553,14 +700,18 @@ def main() -> int:
         args.max_hours = _env_float("VAST_MONITOR_MAX_HOURS", 2.0)
     if args.max_cost is None:
         args.max_cost = _env_float("VAST_MONITOR_MAX_COST", 5.0)
+    if args.min_credit is None:
+        args.min_credit = _env_float("VAST_MONITOR_MIN_CREDIT", 2.0)
     # Ambang negatif selalu-breach — normalisasi jadi mati (0).
-    if args.max_hours < 0 or args.max_cost < 0:
+    if args.max_hours < 0 or args.max_cost < 0 or args.min_credit < 0:
         print(
-            "Peringatan: --max-hours/--max-cost negatif diperlakukan sebagai mati (0).",
+            "Peringatan: --max-hours/--max-cost/--min-credit negatif diperlakukan "
+            "sebagai mati (0).",
             file=sys.stderr,
         )
         args.max_hours = max(0.0, args.max_hours)
         args.max_cost = max(0.0, args.max_cost)
+        args.min_credit = max(0.0, args.min_credit)
     if args.yes and not args.auto_destroy:
         print("Peringatan: --yes tanpa --auto-destroy tidak berpengaruh.", file=sys.stderr)
     if args.api_key and args.auto_destroy:

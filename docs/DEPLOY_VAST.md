@@ -218,6 +218,9 @@ python infra/vast/vast_cost_monitor.py --max-hours 1 --max-cost 2
 python infra/vast/vast_cost_monitor.py --watch --notify-desktop \
   --ntfy-topic jernihai-gpu
 
+# Alert ke HP (ntfy) bila kredit total (credit + balance) turun di bawah $2
+python infra/vast/vast_cost_monitor.py --min-credit 2 --ntfy-topic jernihai-gpu
+
 # Auto-destroy (dry-run dulu tanpa --yes; filter label 'smoke')
 python infra/vast/vast_cost_monitor.py --auto-destroy --label-contains smoke
 python infra/vast/vast_cost_monitor.py --auto-destroy --label-contains smoke --yes
@@ -226,8 +229,11 @@ python infra/vast/vast_cost_monitor.py --auto-destroy --label-contains smoke --y
 python infra/vast/vast_cost_monitor.py --json
 ```
 
-- **Ambang default:** umur > 2 jam atau biaya > $5 (ubah dengan
-  `--max-hours` / `--max-cost`; `0` menonaktifkan).
+- **Ambang default:** umur > 2 jam, biaya > $5, atau **kredit total
+  (credit+balance) < $2** (ubah dengan `--max-hours` / `--max-cost` /
+  `--min-credit`; `0` menonaktifkan; env `VAST_MONITOR_MIN_CREDIT`).
+  Alert kredit berguna supaya tidak kehabisan kredit di tengah sewa
+  (instance bisa mati mendadak saat kredit habis).
 - **Channel alert:** popup desktop (`--notify-desktop`), ntfy.sh
   (`--ntfy-topic`, bisa ke HP), webhook (`--webhook-url`, format
   `{"text": ...}` cocok untuk Slack/Discord). Semua via env
@@ -242,9 +248,11 @@ python infra/vast/vast_cost_monitor.py --json
 Integrasikan ke cron / Task Scheduler (cek tiap 15 menit):
 
 ```bash
-# cron (Linux) — output hanya saat ada masalah; destroy otomatis instance 'smoke'
+# cron (Linux) — output hanya saat ada masalah; destroy otomatis instance
+# 'smoke' + alert ntfy ke HP bila kredit < $2
 */15 * * * * cd /path/to/JernihAI && python infra/vast/vast_cost_monitor.py \
-  --quiet --auto-destroy --yes --label-contains smoke >> vast-monitor.log 2>&1
+  --quiet --auto-destroy --yes --label-contains smoke --min-credit 2 \
+  --ntfy-topic jernihai-gpu >> vast-monitor.log 2>&1
 ```
 
 Checklist:

@@ -180,13 +180,11 @@ bisa diuji end-to-end dari browser tanpa VPS terpisah. Biaya lebih tinggi
    verifikasi hasil (bandingkan dengan versi mock: detail model vs halus).
 6. Destroy instance.
 
-> ⚠️ **FR-07 & kolom DB baru:** fitur retensi & consent menambah kolom
-> (`original_deleted_at`, `result_deleted_at` di tabel `jobs`;
-> `privacy_consent_at` di tabel `users`). Proyek belum memakai Alembic —
-> `create_all` hanya membuat tabel BARU. Bila volume Postgres `pgdata`
-> sudah ada dari versi lama, jalankan sekali:
-> `docker compose down -v` (hapus data dev) atau ALTER TABLE manual, agar
-> service yang memakai kolom baru tidak error di runtime.
+> ✅ **Skema DB (ADR-011):** migrasi skema memakai **Alembic** dan
+> dijalankan otomatis saat service `api` start (`alembic upgrade head`).
+> Migrasi awal memiliki guard + backfill, jadi volume Postgres lama
+> (era `create_all`) langsung dikonvergensikan — **tanpa**
+> `docker compose down -v`. Manual: `docker compose run --rm api alembic upgrade head`.
 
 > **Gap produksi yang diketahui:** `worker-gpu` dan `api` membutuhkan
 > storage bersama (bind mount di Opsi B; di produksi multi-node pakai

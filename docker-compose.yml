@@ -30,7 +30,9 @@ services:
 
   api:
     build: ./api
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # ADR-011: migrasi skema (Alembic) dijalankan OTOMATIS sebelum api start —
+    # deploy ke VPS tidak perlu `docker compose down -v` saat kolom baru.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       ENVIRONMENT: development
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-jernihai}:${POSTGRES_PASSWORD:-jernihai}@db:5432/${POSTGRES_DB:-jernihai}

@@ -128,15 +128,22 @@ kita di dashboard:
 ```bash
 cd /path/to/JernihAI
 
-# Hapus volume DB lama bila ada (kolom/tabel baru: credit_balance,
-# uses_credit, transactions, dst. — belum pakai Alembic; lihat catatan ⚠️).
-docker compose down -v
-
 # Build & start semua service + beat (retensi FR-07 & stale-check NFR-03).
+# Service `api` otomatis menjalankan `alembic upgrade head` (ADR-011)
+# SEBELUM start — skema DB (users/jobs/transactions) dibuat/di-upgrade
+# tanpa kehilangan data. TIDAK perlu `docker compose down -v`.
 docker compose up -d --build worker beat web api
 
 docker compose ps   # semua service: Up (healthy untuk db/redis)
 ```
+
+> 🔄 **Upgrade VPS yang SUDAH berjalan** (menarik commit terbaru): jalankan
+> migrasi SEBELUM worker di-restart agar tidak ada worker yang memulai
+> polling saat skema belum selesai di-upgrade:
+> ```bash
+> git pull && docker compose run --rm api alembic upgrade head \
+>   && docker compose up -d --build api web worker beat
+> ```
 
 - **Web:** http://jernihai.example.com (lewat gateway/HTTPS, §7)
 - **API docs:** https://jernihai.example.com/docs
@@ -144,10 +151,11 @@ docker compose ps   # semua service: Up (healthy untuk db/redis)
   (lihat [DEPLOY_VAST.md](./DEPLOY_VAST.md) §3 — butuh storage bersama:
   bind mount atau R2). Tanpa worker GPU, backend `auto` akan jatuh ke mock.
 
-> ⚠️ **Tanpa Alembic (diketahui):** `create_all` hanya membuat tabel
-> BARU. Volume Postgres lama harus di-reset (`docker compose down -v`)
-> atau di-`ALTER TABLE` manual sebelum memakai kolom baru
-> (`credit_balance` di users, `uses_credit` di jobs, tabel `transactions`).
+> ✅ **Migrasi skema otomatis (ADR-011):** `api` memanggil
+> `alembic upgrade head` saat start. Migrasi awal punya **guard tabel +
+> backfill kolom** — DB lama (era `create_all`) otomatis dilengkapi
+> kolom FR-06/07/08/09/11 dan tabel `transactions` tanpa reset data.
+> Upgrade manual bila perlu: `docker compose run --rm api alembic upgrade head`.
 
 ---
 
@@ -255,7 +263,7 @@ docker compose --profile gateway up -d gateway
 | Webhook 403 `Signature tidak valid` | `MIDTRANS_SERVER_KEY` salah/kosong atau tidak sama dengan yang dipakai membuat token Snap. Cek log: `docker compose logs api \| grep webhook`. |
 | Webhook 404 di dashboard Midtrans | URL belum HTTPS, atau endpoint salah. Harus `https://<domain>/api/v1/billing/webhook`. Uji manual: `curl -X POST https://<domain>/api/v1/billing/webhook -H "Content-Type: application/json" -d '{"order_id":"x","status_code":"200","gross_amount":"0","signature_key":"0"}'` → harus `403` (bukan 404). |
 | Kredit tidak cair padahal status Lunas | Webhook tidak sampai (cek §4 + log). Saldo dicairkan di jalur `paid`; transaksi yang sudah `paid` tidak diproses ulang (idempotent) — cek riwayat `/billing`. |
-| `docker compose` error kolom tidak ada | Volume Postgres lama dari versi sebelum FR-11 → `docker compose down -v` (atau ALTER TABLE manual). |
+| `docker compose` error kolom tidak ada | Skema DB tertinggal versi kode. Jalankan migrasi: `docker compose run --rm api alembic upgrade head` (biasanya sudah otomatis di start api). |
 | Halaman `/admin` tidak muncul untuk email tertentu | Email belum masuk `ADMIN_EMAILS` (list JSON) atau login dengan email beda. Setelah ubah env, restart: `docker compose up -d --force-recreate api`. |
 | Kartu uji ditolak di sandbox | Pakai kartu uji yang benar (4811...1114 sukses; 4111...1112 sengaja ditolak) atau metode lain (QRIS/e-wallet punya tombol simulate di popup Snap). |
 | Token Snap `mock-...` muncul | `MIDTRANS_SERVER_KEY` kosong (mode MOCK). Isi key sandbox lalu restart api. |

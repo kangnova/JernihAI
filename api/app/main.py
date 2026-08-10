@@ -18,14 +18,15 @@ from app.api.routes.jobs import router as jobs_router
 from app.api.routes.quota import router as quota_router
 from app.core.config import settings
 from app.db.session import engine
-from app.models.base import Base
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Dev only: buat tabel otomatis. Migrasi produksi memakai Alembic (Fase 1+).
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Skema DB dikelola Alembic (ADR-011) — `alembic upgrade head` dijalankan
+    # otomatis oleh entrypoint api (docker-compose) atau manual saat deploy.
+    # `Base.metadata.create_all` TIDAK dipakai di runtime: tidak bisa
+    # menghapus kolom & tidak ada versioning. Test memanggil create_all
+    # eksplisit per-fixture (SQLite in-memory), jadi aman dihapus.
     yield
     await engine.dispose()
 

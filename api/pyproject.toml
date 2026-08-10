@@ -21,6 +21,8 @@ dependencies = [
     "email-validator>=2.2.0",
     "python-multipart>=0.0.12",
     "pillow>=11.0.0",
+    # Migrasi skema DB (ADR-011) — dipakai runtime produksi & dev.
+    "alembic>=1.13.0",
 ]
 
 [project.optional-dependencies]
@@ -71,3 +73,8 @@ exclude = [".venv"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 # B008: pemanggilan fungsi di default arg (pola umum FastAPI: Depends(...))
 ignore = ["B008"]
+
+# E501 di migrasi Alembic: kolom ORM (terutama server_default) sering
+# melebihi 100 kolom dan gaya baris panjang itu memang bawaan Alembic.
+[tool.ruff.lint.per-file-ignores]
+"migrations/versions/*.py" = ["E501"]

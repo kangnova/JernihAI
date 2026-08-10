@@ -55,12 +55,20 @@ Monorepo platform web untuk peningkatan kualitas foto/gambar (super-resolution, 
 - **Alur**: halaman `/billing` → pilih paket → modal **Midtrans Snap** (QRIS · e-wallet · Virtual Account) → webhook `POST /api/v1/billing/webhook` (signature SHA512 diverifikasi, **idempotent** per `order_id`) → kredit masuk ke saldo.
 - **Mode MOCK (dev)**: tanpa `MIDTRANS_SERVER_KEY`/`MIDTRANS_CLIENT_KEY`, checkout menghasilkan token Snap mock (sandbox tetap bisa diisi key dari dashboard.sandbox.midtrans.com).
 
-> ⚠️ **Kolom DB baru (FR-07/08/09/11):** fitur-fitur ini menambah kolom
-> `original_deleted_at` / `result_deleted_at` / `face_enhance` / `denoise` /
-> `color_enhance` / `uses_credit` (jobs), `privacy_consent_at` /
-> `credit_balance` (users), dan tabel `transactions`. Karena belum
-> ada Alembic, volume Postgres lama perlu `docker compose down -v` (atau
-> ALTER TABLE manual) sebelum `docker compose up --build`.
+## Migrasi Database (ADR-011)
+
+- Skema dikelola **Alembic** (`api/migrations/`). Saat menambah kolom/tabel,
+  buat migrasi baru (bukan `create_all`):
+  ```bash
+  cd api
+  # Autogenerate (hanya draft — review & rapikan dulu, terutama server_default)
+  .venv/Scripts/python -m alembic revision --autogenerate -m "deskripsi"
+  .venv/Scripts/python -m alembic upgrade head
+  ```
+- **Docker**: service `api` otomatis menjalankan `alembic upgrade head`
+  sebelum start — DB lama di-upgrade **tanpa `docker compose down -v`**
+  (migrasi awal punya guard tabel + backfill kolom untuk DB era `create_all`).
+- **Manual di VPS**: `docker compose run --rm api alembic upgrade head`.
 
 ## Quickstart (Docker)
 
@@ -70,6 +78,7 @@ docker compose up --build
 
 - Web: http://localhost:3000
 - API docs (Swagger): http://localhost:8000/docs
+- Migrasi DB dijalankan otomatis saat `api` start (`alembic upgrade head`).
 - Gateway (opsional, sesuai arsitektur PRD §9): `docker compose --profile gateway up`
 
 ## Dev Lokal (tanpa Docker)
@@ -82,6 +91,8 @@ python -m venv .venv
 .venv/Scripts/python -m pip install -e ".[dev]"     # Windows (git-bash)
 # source .venv/bin/activate && pip install -e ".[dev]"  # Linux/macOS
 cp .env.example .env
+# Skema DB dikelola Alembic (bukan create_all runtime) — jalankan dulu:
+.venv/Scripts/python -m alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 

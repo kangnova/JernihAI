@@ -2,6 +2,15 @@
 
 from app.models.base import Base
 from app.models.job import Job, JobStatus
+from app.models.transaction import Transaction, TransactionStatus
 from app.models.user import AuthProvider, User
 
-__all__ = ["Base", "Job", "JobStatus", "User", "AuthProvider"]
+__all__ = [
+    "Base",
+    "Job",
+    "JobStatus",
+    "Transaction",
+    "TransactionStatus",
+    "User",
+    "AuthProvider",
+]

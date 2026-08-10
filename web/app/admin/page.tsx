@@ -12,21 +12,8 @@ import {
   listAdminUsers,
   resetAdminQuota,
 } from "@/lib/api";
+import { STATUS_LABEL, STATUS_STYLE, formatDate } from "@/lib/admin-ui";
 import { useAuth } from "@/lib/auth";
-
-const STATUS_LABEL: Record<JobStatus, string> = {
-  queued: "Antre",
-  processing: "Memproses",
-  completed: "Selesai",
-  failed: "Gagal",
-};
-
-const STATUS_STYLE: Record<JobStatus, string> = {
-  queued: "border-amber-400/30 bg-amber-400/10 text-amber-300",
-  processing: "border-sky-400/30 bg-sky-400/10 text-sky-300",
-  completed: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300",
-  failed: "border-rose-500/30 bg-rose-500/10 text-rose-300",
-};
 
 function StatCard({
   label,
@@ -43,19 +30,6 @@ function StatCard({
       <p className={`mt-2 text-3xl font-bold ${accent}`}>{value}</p>
     </div>
   );
-}
-
-function formatDate(iso: string | null): string {
-  if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString("id-ID", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
-  } catch {
-    return iso;
-  }
 }
 
 export default function AdminPage() {
@@ -267,7 +241,12 @@ export default function AdminPage() {
                 >
                   <div className="min-w-0">
                     <p className="truncate font-medium text-slate-100">
-                      {u.email}
+                      <Link
+                        href={`/admin/users/${u.id}`}
+                        className="text-indigo-300 transition-colors hover:text-indigo-200 hover:underline"
+                      >
+                        {u.email}
+                      </Link>
                       {u.provider === "google" && (
                         <span className="ml-2 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-400">
                           Google

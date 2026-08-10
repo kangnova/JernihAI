@@ -18,6 +18,7 @@ from app.core.quota import quota_limit, quota_remaining, wib_today
 from app.core.storage import delete_if_inside
 from app.db.session import get_db
 from app.models.job import Job, JobStatus
+from app.models.transaction import Transaction
 from app.models.user import User
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -71,6 +72,24 @@ class AdminUserList(BaseModel):
     total: int
 
 
+class AdminTransactionOut(BaseModel):
+    """Transaksi kredit (FR-11) milik satu user — untuk detail user admin."""
+    id: str
+    order_id: str
+    provider: str
+    package_slug: str
+    amount_idr: int
+    credits: int
+    status: str
+    created_at: str | None
+    paid_at: str | None
+
+
+class AdminTransactionList(BaseModel):
+    items: list[AdminTransactionOut]
+    total: int
+
+
 class QuotaResetRequest(BaseModel):
     """Target reset kuota: `email` satu user ATAU `all=true` (semua)."""
     email: str | None = None
@@ -80,6 +99,28 @@ class QuotaResetRequest(BaseModel):
 class QuotaResetOut(BaseModel):
     reset: int
     email: str | None
+
+
+def _admin_user_out(user: User, job_count: int) -> AdminUserOut:
+    """Bangun AdminUserOut — dipakai daftar user & detail satu user."""
+    return AdminUserOut(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        provider=user.provider,
+        is_active=user.is_active,
+        created_at=user.created_at.isoformat() if user.created_at else None,
+        privacy_consent_at=(
+            user.privacy_consent_at.isoformat()
+            if user.privacy_consent_at
+            else None
+        ),
+        quota_used=user.free_daily_quota_used or 0,
+        quota_limit=quota_limit(),
+        quota_remaining=quota_remaining(user),  # lazy reset WIB (FR-06)
+        credit_balance=user.credit_balance or 0,
+        job_count=job_count,
+    )
 
 
 @router.get(
@@ -220,33 +261,94 @@ async def admin_users(
         ).all()
     )
 
-    items: list[AdminUserOut] = []
-    for user in users:
-        # quota_remaining menjalankan lazy reset WIB bila ganti hari —
-        # di-commit agar tampilan konsisten dengan logika FR-06.
-        remaining = quota_remaining(user)
-        items.append(
-            AdminUserOut(
-                id=user.id,
-                email=user.email,
-                name=user.name,
-                provider=user.provider,
-                is_active=user.is_active,
-                created_at=user.created_at.isoformat() if user.created_at else None,
-                privacy_consent_at=(
-                    user.privacy_consent_at.isoformat()
-                    if user.privacy_consent_at
-                    else None
-                ),
-                quota_used=user.free_daily_quota_used or 0,
-                quota_limit=quota_limit(),
-                quota_remaining=remaining,
-                credit_balance=user.credit_balance or 0,
-                job_count=job_counts.get(user.id, 0),
-            )
-        )
+    items = [
+        _admin_user_out(user, job_counts.get(user.id, 0)) for user in users
+    ]
     await db.commit()  # persist lazy reset kuota
     return AdminUserList(items=items, total=total)
+
+
+@router.get(
+    "/users/{user_id}",
+    response_model=AdminUserOut,
+    summary="Detail satu user (profil + kuota/kredit) — FR-13",
+)
+async def admin_user_detail(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> AdminUserOut:
+    """Profil lengkap satu user — dipakai halaman detail admin
+    (email, kuota, kredit, consent, jumlah riwayat job).
+    """
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User tidak ditemukan"
+        )
+    job_count = (
+        await db.scalar(
+            select(func.count()).select_from(Job).where(Job.user_id == user.id)
+        )
+        or 0
+    )
+    out = _admin_user_out(user, job_count)
+    await db.commit()  # persist lazy reset kuota
+    return out
+
+
+@router.get(
+    "/users/{user_id}/transactions",
+    response_model=AdminTransactionList,
+    summary="Transaksi kredit satu user — FR-13",
+)
+async def admin_user_transactions(
+    user_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> AdminTransactionList:
+    """Riwayat pembelian kredit (FR-11) milik satu user — terbaru dulu.
+    Dipakai halaman detail admin untuk audit transaksi.
+    """
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User tidak ditemukan"
+        )
+    total = (
+        await db.scalar(
+            select(func.count())
+            .select_from(Transaction)
+            .where(Transaction.user_id == user.id)
+        )
+        or 0
+    )
+    rows = (
+        await db.execute(
+            select(Transaction)
+            .where(Transaction.user_id == user.id)
+            .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).scalars()
+    items = [
+        AdminTransactionOut(
+            id=t.id,
+            order_id=t.order_id,
+            provider=t.provider,
+            package_slug=t.package_slug,
+            amount_idr=t.amount_idr,
+            credits=t.credits,
+            status=t.status,
+            created_at=t.created_at.isoformat() if t.created_at else None,
+            paid_at=t.paid_at.isoformat() if t.paid_at else None,
+        )
+        for t in rows
+    ]
+    return AdminTransactionList(items=items, total=total)
 
 
 @router.post(

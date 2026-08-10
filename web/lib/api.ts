@@ -290,6 +290,35 @@ export async function listAdminUsers(
   );
 }
 
+// Detail satu user (profil + kuota/kredit) — halaman detail admin.
+export async function getAdminUser(userId: string): Promise<AdminUser> {
+  return apiFetch<AdminUser>(`/api/v1/admin/users/${userId}`);
+}
+
+// Transaksi kredit (FR-11) milik satu user — halaman detail admin.
+export interface AdminTransaction {
+  id: string;
+  order_id: string;
+  provider: string;
+  package_slug: string;
+  amount_idr: number;
+  credits: number;
+  status: "pending" | "paid" | "failed" | "expired";
+  created_at: string | null;
+  paid_at: string | null;
+}
+
+export async function listAdminUserTransactions(
+  userId: string,
+  limit = 20,
+  offset = 0,
+): Promise<{ items: AdminTransaction[]; total: number }> {
+  const q = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return apiFetch<{ items: AdminTransaction[]; total: number }>(
+    `/api/v1/admin/users/${userId}/transactions?${q.toString()}`,
+  );
+}
+
 // Alat admin (pengelola/pengembang): reset kuota gratis & hapus job uji.
 export interface AdminQuotaResetResult {
   reset: number;

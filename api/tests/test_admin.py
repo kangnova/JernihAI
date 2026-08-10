@@ -316,3 +316,130 @@ async def test_admin_jobs_filtered_by_email(client, monkeypatch):
     # Tanpa filter = semua.
     resp = await client.get("/api/v1/admin/jobs")
     assert resp.json()["total"] == 2
+
+
+# --- Detail user: profil + transaksi kredit (halaman detail admin) ---
+
+
+async def _user_id_by_email(client, email: str) -> str:
+    resp = await client.get(f"/api/v1/admin/users?email={email}")
+    return resp.json()["items"][0]["id"]
+
+
+async def test_admin_user_detail_by_id(client, monkeypatch):
+    """GET /admin/users/{id}: profil lengkap + kuota/kredit + job_count."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "target@example.com")
+    await _upload(client)  # 1 job atas nama target
+    await _login(client, "boss@example.com")
+    target_id = await _user_id_by_email(client, "target@example.com")
+
+    resp = await client.get(f"/api/v1/admin/users/{target_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["email"] == "target@example.com"
+    assert body["name"] == "Tono"
+    assert body["quota_used"] == 1
+    assert body["quota_limit"] == 3
+    assert body["quota_remaining"] == 2
+    assert body["credit_balance"] == 0
+    assert body["job_count"] == 1
+    assert body["privacy_consent_at"] is not None
+
+    # User tak dikenal -> 404.
+    resp = await client.get("/api/v1/admin/users/tidak-ada")
+    assert resp.status_code == 404
+
+
+async def test_admin_user_detail_denied_for_regular_user(client):
+    """User biasa tidak boleh melihat detail user."""
+    await _register(client)
+    resp = await client.get("/api/v1/admin/users/some-id")
+    assert resp.status_code == 403
+    resp = await client.get("/api/v1/admin/users/some-id/transactions")
+    assert resp.status_code == 403
+
+
+async def test_admin_user_transactions(db, client, monkeypatch):
+    """Transaksi kredit milik satu user — terbaru dulu, tanpa bocor antar user."""
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from sqlalchemy import select
+
+    from app.models.transaction import Transaction, TransactionStatus
+    from app.models.user import User
+
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "target@example.com")
+    await _register(client, "lain@example.com")
+
+    # Dua transaksi milik target + satu milik user lain (tidak boleh bocor).
+    async with db() as session:
+        target = (
+            await session.execute(
+                select(User).where(User.email == "target@example.com")
+            )
+        ).scalar_one()
+        lain = (
+            await session.execute(
+                select(User).where(User.email == "lain@example.com")
+            )
+        ).scalar_one()
+        session.add_all(
+            [
+                Transaction(
+                    id=str(uuid4()),
+                    user_id=target.id,
+                    order_id="ORD-T-002",
+                    package_slug="mini",
+                    amount_idr=20000,
+                    credits=25,
+                    status=TransactionStatus.PAID.value,
+                    created_at=datetime(2026, 8, 2, 3, 0, tzinfo=UTC),
+                    paid_at=datetime(2026, 8, 2, 3, 5, tzinfo=UTC),
+                ),
+                Transaction(
+                    id=str(uuid4()),
+                    user_id=target.id,
+                    order_id="ORD-T-001",
+                    package_slug="starter",
+                    amount_idr=50000,
+                    credits=70,
+                    status=TransactionStatus.PENDING.value,
+                    created_at=datetime(2026, 8, 1, 3, 0, tzinfo=UTC),
+                ),
+                Transaction(
+                    id=str(uuid4()),
+                    user_id=lain.id,
+                    order_id="ORD-LAIN-001",
+                    package_slug="mini",
+                    amount_idr=20000,
+                    credits=25,
+                    status=TransactionStatus.PAID.value,
+                    created_at=datetime(2026, 8, 1, 4, 0, tzinfo=UTC),
+                ),
+            ]
+        )
+        await session.commit()
+
+    await _login(client, "boss@example.com")
+    target_id = await _user_id_by_email(client, "target@example.com")
+    resp = await client.get(f"/api/v1/admin/users/{target_id}/transactions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    # Terbaru dulu: ORD-T-002 (2 Agu) sebelum ORD-T-001 (1 Agu).
+    assert [t["order_id"] for t in body["items"]] == ["ORD-T-002", "ORD-T-001"]
+    paid = body["items"][0]
+    assert paid["status"] == "paid"
+    assert paid["credits"] == 25
+    assert paid["amount_idr"] == 20000
+    assert paid["paid_at"] is not None
+    assert all(t["order_id"] != "ORD-LAIN-001" for t in body["items"])
+
+    # 404 utk user tak dikenal.
+    resp = await client.get("/api/v1/admin/users/tidak-ada/transactions")
+    assert resp.status_code == 404

@@ -32,6 +32,9 @@ class Job(Base):
     # + wdn, DNI) dan color enhance (autocontrast + saturasi).
     denoise: Mapped[bool] = mapped_column(default=False)
     color_enhance: Mapped[bool] = mapped_column(default=False)
+    # FR-11: job ini membayar memakai 1 KREDIT berbayar (bukan kuota gratis).
+    # Dipakai refund saat job gagal: kredit dikembalikan ke saldo user.
+    uses_credit: Mapped[bool] = mapped_column(default=False)
     original_name: Mapped[str] = mapped_column(String(255))
     # Path relatif terhadap folder storage (lihat app/core/storage.py).
     # NOTE (FR-07): setelah purge retensi, file dihapus dari disk dan

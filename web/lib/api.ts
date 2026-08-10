@@ -98,6 +98,8 @@ export interface QuotaInfo {
   used: number;
   remaining: number;
   reset_date: string;
+  credit_balance: number; // FR-11: saldo kredit berbayar
+  total_slots: number; // remaining + credit_balance
 }
 
 export async function getQuota(): Promise<QuotaInfo> {
@@ -167,6 +169,42 @@ export async function getJob(jobId: string): Promise<Job> {
   return apiFetch<Job>(`/api/v1/jobs/${jobId}`);
 }
 
+// FR-12: batch processing — upload hingga 10 gambar sekaligus.
+export async function createBatchJobs(input: {
+  files: File[];
+  scale: number;
+  outputFormat: Job["output_format"];
+  faceEnhance: boolean;
+  denoise: boolean;
+  colorEnhance: boolean;
+}): Promise<JobList> {
+  const form = new FormData();
+  for (const f of input.files) form.append("files", f);
+  form.append("scale", String(input.scale));
+  form.append("output_format", input.outputFormat);
+  form.append("face_enhance", String(input.faceEnhance));
+  form.append("denoise", String(input.denoise));
+  form.append("color_enhance", String(input.colorEnhance));
+
+  const res = await fetch(`${API_URL}/api/v1/jobs/batch`, {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+
+  if (!res.ok) {
+    let detail = "Upload batch gagal";
+    try {
+      const data = await res.json();
+      detail = data.detail ?? detail;
+    } catch {
+      // body bukan JSON
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return (await res.json()) as JobList;
+}
+
 export async function listJobs(limit = 20, offset = 0): Promise<JobList> {
   return apiFetch<JobList>(
     `/api/v1/jobs?limit=${limit}&offset=${offset}`,
@@ -181,5 +219,120 @@ export async function fetchJobResult(jobId: string): Promise<Blob> {
     throw new ApiError(res.status, "Gagal mengunduh hasil");
   }
   return res.blob();
+}
+
+// --- Admin (FR-13) ---
+
+export interface AdminStats {
+  total_users: number;
+  users_today: number;
+  total_jobs: number;
+  jobs_by_status: Record<string, number>;
+  jobs_today: number;
+  free_quota_limit: number;
+  revenue_idr: number;
+}
+
+export interface AdminJob {
+  id: string;
+  user_email: string | null;
+  status: JobStatus;
+  scale: number;
+  output_format: string;
+  original_name: string;
+  created_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+}
+
+export async function getAdminStats(): Promise<AdminStats> {
+  return apiFetch<AdminStats>("/api/v1/admin/stats");
+}
+
+export async function listAdminJobs(
+  limit = 20,
+  offset = 0,
+): Promise<{ items: AdminJob[]; total: number }> {
+  return apiFetch<{ items: AdminJob[]; total: number }>(
+    `/api/v1/admin/jobs?limit=${limit}&offset=${offset}`,
+  );
+}
+
+// --- Billing & kredit (FR-11 — Midtrans) ---
+
+export interface BillingPackage {
+  slug: string;
+  credits: number;
+  price_idr: number;
+}
+
+export interface BillingPackages {
+  credit_balance: number;
+  packages: BillingPackage[];
+}
+
+export interface CheckoutResult {
+  order_id: string;
+  snap_token: string;
+  redirect_url: string | null;
+  credits: number;
+  amount_idr: number;
+}
+
+export interface BillingTransaction {
+  id: string;
+  order_id: string;
+  package_slug: string;
+  amount_idr: number;
+  credits: number;
+  status: string;
+  created_at: string | null;
+  paid_at: string | null;
+}
+
+export async function getBillingPackages(): Promise<BillingPackages> {
+  return apiFetch<BillingPackages>("/api/v1/billing/packages");
+}
+
+export async function createCheckout(
+  packageSlug: string,
+): Promise<CheckoutResult> {
+  return apiFetch<CheckoutResult>("/api/v1/billing/checkout", {
+    method: "POST",
+    body: JSON.stringify({ package_slug: packageSlug }),
+  });
+}
+
+export async function listBillingTransactions(): Promise<{
+  items: BillingTransaction[];
+  total: number;
+}> {
+  return apiFetch<{ items: BillingTransaction[]; total: number }>(
+    "/api/v1/billing/transactions",
+  );
+}
+
+// --- Hak subjek data (NFR-05 / UU PDP) ---
+
+// Ekspor data pribadi: download JSON attachment (profil + riwayat).
+export async function exportAccountData(): Promise<Blob> {
+  const res = await fetch(`${API_URL}/api/v1/account/export`, {
+    credentials: "include",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "Gagal mengekspor data");
+  }
+  return res.blob();
+}
+
+// Hapus akun beserta seluruh data (permanen, tidak bisa dibatalkan).
+export async function deleteAccount(): Promise<void> {
+  const res = await fetch(`${API_URL}/api/v1/account`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "Gagal menghapus akun");
+  }
 }
 

@@ -60,3 +60,36 @@ def refund_quota(user: User) -> None:
     """Kembalikan 1 kuota (job gagal); floor di 0."""
     _reset_if_needed(user)
     user.free_daily_quota_used = max(0, quota_used(user) - 1)
+
+
+# --- Kredit berbayar (FR-11) — dipakai saat kuota gratis habis ---
+
+
+def credit_balance(user: User) -> int:
+    return user.credit_balance or 0
+
+
+def slots_available(user: User) -> int:
+    """Total slot proses tersisa: kuota gratis + saldo kredit."""
+    return quota_remaining(user) + credit_balance(user)
+
+
+def consume_slots(user: User, n: int) -> tuple[int, int]:
+    """Konsumsi `n` slot pemrosesan; return (free_used, credit_used).
+
+    Kuota gratis dipakai lebih dulu; sisanya dari kredit (FR-11). Pemanggil
+    wajib memastikan `n <= slots_available(user)`; kalau tidak, credit bisa
+    minus. Digabung dalam transaksi commit route.
+    """
+    free_used = min(n, quota_remaining(user))
+    credit_used = n - free_used
+    for _ in range(free_used):
+        consume_quota(user)
+    if credit_used:
+        user.credit_balance = max(0, credit_balance(user) - credit_used)
+    return free_used, credit_used
+
+
+def refund_credit(user: User, amount: int = 1) -> None:
+    """Kembalikan kredit (job berbayar gagal) ke saldo user."""
+    user.credit_balance = credit_balance(user) + amount

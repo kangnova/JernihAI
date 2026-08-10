@@ -10,6 +10,7 @@ export interface User {
   name: string | null;
   provider: string;
   privacy_consent_at: string | null;
+  is_admin: boolean; // FR-13: email terdaftar di ADMIN_EMAILS
   created_at: string;
 }
 

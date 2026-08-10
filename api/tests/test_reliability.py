@@ -59,6 +59,7 @@ async def db(tmp_path, monkeypatch):
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr(settings, "celery_task_always_eager", True)
     monkeypatch.setattr(settings, "enhance_backend", "mock")
+    monkeypatch.setattr(settings, "rate_limit_enabled", False)  # NFR-04
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
     monkeypatch.setattr(settings, "result_dir", str(tmp_path / "results"))
     monkeypatch.setattr(enhance_module, "async_session_factory", factory)
@@ -262,6 +263,18 @@ def _call_task(task_fake, job_id: str) -> dict:
     return out[0]
 
 
+async def test_task_decorator_has_nfr03_time_limits():
+    """NFR-03: task enhance memakai timeout per job (soft 120s, hard 180s)."""
+    task = enhance_module.process_enhancement
+    assert task.soft_time_limit == settings.job_soft_time_limit_seconds
+    assert task.time_limit == settings.job_hard_time_limit_seconds
+    # Default Celery global di worker.py konsisten dengan settings.
+    conf = enhance_module.celery_app.conf
+    assert conf.task_soft_time_limit == settings.job_soft_time_limit_seconds
+    assert conf.task_time_limit == settings.job_hard_time_limit_seconds
+    assert conf.task_reject_on_worker_lost is True
+
+
 async def test_retry_policy_flags_per_attempt(db, tmp_path, monkeypatch):
     """force_retry & refund_on_fail dihitung benar per percobaan."""
     captured: list[dict] = []
@@ -380,6 +393,44 @@ async def test_stale_check_does_not_touch_other_statuses(db):
     stats = await stale_module.recover_stale_jobs(now=NOW)
 
     assert stats == {"recovered": 0}
+
+
+async def test_stale_paid_job_refunds_credit(db):
+    """FR-11: job BERBAYAR yang hang -> stale-check refund KREDIT, bukan kuota.
+
+    Job memakai kredit (uses_credit=True, free quota 0) yang stuck di
+    `processing` harus mengembalikan 1 kredit ke saldo user — kuota gratis
+    tidak boleh disentuh (refund sesuai sumber pembayaran).
+    """
+    async with db() as session:
+        user = User(
+            id="u-paid",
+            email="paid@example.com",
+            password_hash="x",
+            credit_balance=0,  # 1 kredit sudah dikonsumsi job ini
+            free_daily_quota_used=0,
+            free_quota_date="1970-01-01",
+            privacy_consent_at=NOW,
+        )
+        session.add(user)
+        await session.commit()
+    job_id = await _add_job(
+        db,
+        user_id="u-paid",
+        status=JobStatus.PROCESSING.value,
+        updated_at=OLD,
+        uses_credit=True,
+    )
+
+    stats = await stale_module.recover_stale_jobs(now=NOW)
+
+    assert stats == {"recovered": 1}
+    async with db() as session:
+        user = await session.get(User, "u-paid")
+        assert user.credit_balance == 1  # kredit dikembalikan ke saldo
+        assert user.free_daily_quota_used == 0  # kuota gratis tidak disentuh
+        job = await session.get(Job, job_id)
+        assert job.status == JobStatus.FAILED.value
 
 
 # --- Integrasi: stale-check membuka jalan retensi (anti bocor disk) ---

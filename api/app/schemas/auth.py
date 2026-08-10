@@ -31,4 +31,6 @@ class UserOut(BaseModel):
     provider: str
     # Kapan user menyetujui kebijakan privasi (None = belum, FR-07).
     privacy_consent_at: datetime | None = None
+    # FR-13: apakah email user terdaftar di ADMIN_EMAILS (property model).
+    is_admin: bool = False
     created_at: datetime

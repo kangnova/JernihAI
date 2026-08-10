@@ -41,6 +41,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-secret-ganti-di-produksi-0123456789abcdef}
       WEB_URL: http://localhost:3000
       COOKIE_SECURE: "false"
+      # FR-13: email admin (list JSON) — contoh: '["admin@example.com"]'
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-[]}
+      # FR-11: Midtrans Snap — kosongkan untuk mode MOCK (dev).
+      MIDTRANS_SERVER_KEY: ${MIDTRANS_SERVER_KEY:-}
+      MIDTRANS_CLIENT_KEY: ${MIDTRANS_CLIENT_KEY:-}
+      MIDTRANS_IS_PRODUCTION: ${MIDTRANS_IS_PRODUCTION:-false}
     ports:
       - "8000:8000"
     volumes:

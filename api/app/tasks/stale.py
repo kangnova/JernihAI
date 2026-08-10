@@ -8,8 +8,9 @@ job `completed`/`failed` — lihat app/tasks/retention.py) → bocor disk.
 
 Solusi: sweep berkala (`recover_stale_jobs`, dijadwalkan Celery Beat) yang
 menandai job `processing` yang `updated_at`-nya lebih tua dari
-`job_stale_minutes` menjadi `failed` + error jelas + refund kuota (FR-06).
-Setelah itu retensi normal bisa membersihkan filenya.
+`job_stale_minutes` menjadi `failed` + error jelas + refund sesuai sumber
+pembayaran (FR-06/FR-11): kuota gratis untuk job gratis, kredit untuk job
+berbayar. Setelah itu retensi normal bisa membersihkan filenya.
 
 Keputusan desain (NFR-03):
 - Retry otomatis 2x di task Celery hanya menutupi exception yang DITANGKAP
@@ -32,7 +33,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.quota import refund_quota
+from app.core.quota import refund_credit, refund_quota
 from app.db.session import async_session_factory
 from app.models.job import Job, JobStatus
 from app.models.user import User
@@ -68,7 +69,12 @@ async def recover_stale_jobs(now: datetime | None = None) -> dict[str, int]:
             )
             user = await session.get(User, job.user_id)
             if user is not None:
-                refund_quota(user)
+                # FR-11: refund SESUAI SUMBER — job berbayar mengembalikan
+                # kredit (bukan kuota gratis), job gratis sebaliknya.
+                if job.uses_credit:
+                    refund_credit(user)
+                else:
+                    refund_quota(user)
             stats["recovered"] += 1
 
         await session.commit()

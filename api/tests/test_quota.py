@@ -41,6 +41,7 @@ async def db(tmp_path, monkeypatch):
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr(settings, "celery_task_always_eager", True)
     monkeypatch.setattr(settings, "enhance_backend", "mock")
+    monkeypatch.setattr(settings, "rate_limit_enabled", False)  # NFR-04
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
     monkeypatch.setattr(settings, "result_dir", str(tmp_path / "results"))
     monkeypatch.setattr(enhance_module, "async_session_factory", factory)
@@ -99,6 +100,9 @@ async def test_quota_initial_full(client):
         "used": 0,
         "remaining": 3,
         "reset_date": quota_module.wib_today().isoformat(),
+        # FR-11: saldo kredit berbayar + total slot (gratis + kredit).
+        "credit_balance": 0,
+        "total_slots": 3,
     }
 
 

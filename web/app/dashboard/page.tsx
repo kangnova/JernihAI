@@ -41,6 +41,28 @@ export default function DashboardPage() {
           >
             Riwayat
           </Link>
+          <Link
+            href="/account"
+            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-slate-300 transition-colors hover:bg-white/10"
+          >
+            Akun
+          </Link>
+          {/* FR-11: top-up kredit berbayar (Midtrans Snap) */}
+          <Link
+            href="/billing"
+            className="rounded-full border border-indigo-400/30 bg-indigo-500/10 px-4 py-1.5 text-sm text-indigo-300 transition-colors hover:bg-indigo-500/20"
+          >
+            Kredit
+          </Link>
+          {/* FR-13: link admin hanya untuk user dengan email di ADMIN_EMAILS */}
+          {user.is_admin && (
+            <Link
+              href="/admin"
+              className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-slate-300 transition-colors hover:bg-white/10"
+            >
+              Admin
+            </Link>
+          )}
           <button
             onClick={async () => {
               await logout();

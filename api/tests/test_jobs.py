@@ -43,6 +43,7 @@ async def db(tmp_path, monkeypatch):
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr(settings, "celery_task_always_eager", True)
     monkeypatch.setattr(settings, "enhance_backend", "mock")  # Fase 2: tanpa ML lokal
+    monkeypatch.setattr(settings, "rate_limit_enabled", False)  # NFR-04
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
     monkeypatch.setattr(settings, "result_dir", str(tmp_path / "results"))
     # Sesi yang dipakai task = sesi yang sama dengan route (DB test).
@@ -168,6 +169,74 @@ async def test_upload_denoise_color_on(client):
     assert data["status"] == JobStatus.COMPLETED.value
     assert data["denoise"] is True
     assert data["color_enhance"] is True
+
+
+# --- FR-12: batch processing ---
+
+
+async def _batch_upload(client, n: int):
+    return await client.post(
+        "/api/v1/jobs/batch",
+        files=[
+            ("files", (f"f{i}.png", _image_bytes("png"), "image/png"))
+            for i in range(n)
+        ],
+        data={"scale": "2", "output_format": "webp"},
+    )
+
+
+async def test_batch_creates_all_jobs_and_consumes_quota(client):
+    """FR-12: 3 gambar -> 3 job dibuat, semuanya selesai, kuota -3."""
+    await _register(client)
+    resp = await _batch_upload(client, 3)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["total"] == 3
+    assert len(body["items"]) == 3
+    assert all(i["status"] == JobStatus.COMPLETED.value for i in body["items"])
+    assert [j["original_name"] for j in body["items"]] == ["f0.png", "f1.png", "f2.png"]
+
+    quota = (await client.get("/api/v1/quota")).json()
+    assert quota["remaining"] == 0  # 3 - 3
+
+
+async def test_batch_rejects_too_many_files(client, monkeypatch):
+    """FR-12: lebih dari batas (default 10) ditolak 422."""
+    await _register(client)
+    monkeypatch.setattr(settings, "free_daily_quota", 50)
+    resp = await _batch_upload(client, 11)
+    assert resp.status_code == 422
+    assert "1–10" in resp.json()["detail"]
+
+
+async def test_batch_rejects_when_quota_insufficient(client):
+    """FR-12 + FR-06: total batch melebihi kuota harian -> 403, tanpa job."""
+    await _register(client)
+    resp = await _batch_upload(client, 5)  # kuota gratis default 3
+    assert resp.status_code == 403
+    assert "tidak cukup" in resp.json()["detail"]
+
+    riwayat = (await client.get("/api/v1/jobs")).json()
+    assert riwayat == {"items": [], "total": 0}  # tidak ada job tersisa
+
+
+async def test_batch_rejects_invalid_content_atomically(client):
+    """FR-12: satu file tidak valid -> request gagal total (tidak ada job)."""
+    await _register(client)
+    resp = await client.post(
+        "/api/v1/jobs/batch",
+        files=[
+            ("files", ("ok.png", _image_bytes("png"), "image/png")),
+            ("files", ("fake.png", b"bukan gambar", "image/png")),
+        ],
+        data={"scale": "2", "output_format": "webp"},
+    )
+    assert resp.status_code == 415
+
+    riwayat = (await client.get("/api/v1/jobs")).json()
+    assert riwayat == {"items": [], "total": 0}
+    quota = (await client.get("/api/v1/quota")).json()
+    assert quota["remaining"] == 3  # kuota tidak terpotong
 
 
 async def test_upload_rejects_non_image_content(client):

@@ -47,9 +47,17 @@ Monorepo platform web untuk peningkatan kualitas foto/gambar (super-resolution, 
 - Endpoint `GET /api/v1/jobs` (list riwayat user, pagination `limit`/`offset`, urut terbaru) — hanya job milik user.
 - Halaman `/history` di web (link dari dashboard): badge status, info proses, **unduh ulang** selama hasil masih tersimpan (7 hari free). Tombol dinonaktifkan otomatis saat hasil sudah dihapus retensi.
 
-> ⚠️ **Kolom DB baru (FR-07/08/09):** fitur-fitur ini menambah kolom
+## Kredit & Pembayaran (FR-11 — Midtrans Snap)
+
+- **Model kredit**: 1 kredit = 1 gambar; kuota gratis (FR-06) dipakai lebih dulu, kredit otomatis menyusul saat habis. Job berbayar yang gagal **di-refund otomatis** ke saldo.
+- **Paket** dikonfigurasi via env `BILLING_PACKAGES` (default: 20 kredit Rp10k / 100 kredit Rp29k / 500 kredit Rp79k).
+- **Alur**: halaman `/billing` → pilih paket → modal **Midtrans Snap** (QRIS · e-wallet · Virtual Account) → webhook `POST /api/v1/billing/webhook` (signature SHA512 diverifikasi, **idempotent** per `order_id`) → kredit masuk ke saldo.
+- **Mode MOCK (dev)**: tanpa `MIDTRANS_SERVER_KEY`/`MIDTRANS_CLIENT_KEY`, checkout menghasilkan token Snap mock (sandbox tetap bisa diisi key dari dashboard.sandbox.midtrans.com).
+
+> ⚠️ **Kolom DB baru (FR-07/08/09/11):** fitur-fitur ini menambah kolom
 > `original_deleted_at` / `result_deleted_at` / `face_enhance` / `denoise` /
-> `color_enhance` (jobs) dan `privacy_consent_at` (users). Karena belum
+> `color_enhance` / `uses_credit` (jobs), `privacy_consent_at` /
+> `credit_balance` (users), dan tabel `transactions`. Karena belum
 > ada Alembic, volume Postgres lama perlu `docker compose down -v` (atau
 > ALTER TABLE manual) sebelum `docker compose up --build`.
 

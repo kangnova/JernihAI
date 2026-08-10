@@ -10,6 +10,7 @@ from enum import StrEnum
 from sqlalchemy import DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.config import settings
 from app.models.base import Base
 
 
@@ -35,10 +36,22 @@ class User(Base):
     # reset, format "YYYY-MM-DD" (sentinel 1970-01-01 = belum pernah).
     free_daily_quota_used: Mapped[int] = mapped_column(Integer, default=0)
     free_quota_date: Mapped[str] = mapped_column(String(10), default="1970-01-01")
+    # FR-11: saldo kredit berbayar (1 kredit = 1 gambar). Dipakai saat
+    # kuota gratis habis; diisi oleh webhook pembayaran sukses.
+    credit_balance: Mapped[int] = mapped_column(Integer, default=0)
     # FR-07 (UU PDP): timestamp persetujuan kebijakan privasi (kapan user
     # menyetujui; None = belum menyetujui). Consent wajib saat register
     # lokal; user Google OAuth diminta lewat banner di dashboard.
     privacy_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def is_admin(self) -> bool:
+        """FR-13: admin ditentukan dari daftar email env (ADMIN_EMAILS).
+
+        Property (bukan kolom) agar tidak perlu migrasi; terbaca oleh
+        `UserOut` via from_attributes.
+        """
+        return (self.email or "").lower() in {e.lower() for e in settings.admin_emails}
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -114,3 +114,15 @@ Format: ADR ringan. Status: `proposed` (belum dieksekusi) / `accepted` / `supers
   - **`JobOut` mengekspos `result_deleted_at`** — UI riwayat menonaktifkan tombol unduh ulang saat hasil sudah dihapus retensi (FR-07), menghindari 410 di sisi klien.
   - **Halaman `/history`** di web: daftar riwayat + badge status + unduh ulang (memakai endpoint download FR-05 yang sudah ada, dengan ownership check); state loading/empty/error. Link "Riwayat" di nav dashboard.
 - **Konsekuensi:** tanpa Alembic, kolom tidak bertambah (murni endpoint + UI baru — tidak ada migrasi); retensi tetap jalan (riwayat otomatis berkurang saat hasil dihapus 7 hari).
+
+## ADR-010: Kredit & Pembayaran (FR-11) — Midtrans Snap + Model Kredit
+
+- **Status:** `accepted` — Fase 2.
+- **Konteks:** FR-11 wajib pembayaran kredit/subscription (PRD §11: QRIS, e-wallet, VA; webhook idempotent). PRD menyebut Midtrans/Xendit sebagai opsi. Riset (Agustus 2026): keduanya SDK Python resmi + sandbox instan; **Midtrans dipilih** karena (1) **Snap modal popup siap pakai** (QRIS/e-wallet/VA otomatis — hemat effort di Next.js), (2) **webhook signature di payload** (`X-Midtrans-Signature` = SHA512 dari `order_id+status_code+gross_amount+server_key`) — lebih robust dari token header `x-callback-token` Xendit yang rawan bocor/terlupakan.
+- **Keputusan:**
+  - **Model kredit** (`credit_balance` di User, kolom `uses_credit` di Job, tabel `transactions` baru). **Konsumsi slot prioritas**: kuota gratis (FR-06) lebih dulu, kredit bila habis; `uses_credit=True` menandai sumber. **Refund** otomatis ke sumber asal saat job gagal (percobaan retry terakhir / stale-check).
+  - **`app/core/billing.py` provider-agnostic**: `create_snap_token()` (Midtrans via SDK `midtransclient` bila key ada, fallback token MOCK tanpa SDK untuk dev/test), `verify_signature()` (SHA512), `handle_paid()` idempotent. Ganti gateway = cukup 1 modul.
+  - **Endpoint**: `GET /billing/packages` (paket dari `BILLING_PACKAGES`), `POST /billing/checkout` (order_id `<uuid>`, token Snap, simpan transaksi `pending`), `POST /billing/webhook` (verifikasi signature → `handle_paid` idempotent → credit ditambah sekali per order_id), `GET /billing/transactions` (riwayat milik user). `GET /quota` menambah `credit_balance`/`total_slots`.
+  - **Paket default** (`BILLING_PACKAGES`): kredit-20 (Rp10k), lite-100 (Rp29k), pro-500 (Rp79k) — harga contoh, ubah via env.
+  - **Web**: halaman `/billing` (saldo, paket, modal Snap via `snap.pay(token)`, riwayat transaksi), badge kredit + tombol "Beli kredit" di dashboard, tombol upload hanya blok saat `total_slots == 0` (kuota gratis + kredit).
+- **Konsekuensi:** butuh `MIDTRANS_SERVER_KEY`/`MIDTRANS_CLIENT_KEY` di env (kosong = mode MOCK dev); webhook perlu di-expose ke internet (Midtrans dashboard) di produksi; tanpa Alembic kolom/tabel baru butuh `docker compose down -v` untuk DB existing; refund kredit hanya menambah saldo (tidak ada refund uang — model kredit, bukan langganan).

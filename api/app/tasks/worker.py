@@ -30,6 +30,16 @@ celery_app.conf.update(
     # dobel-diproses saat worker restart.
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # NFR-03: timeout per job (prd.md §8) — soft 120 dtk (interupsi pipeline
+    # yang hang -> job failed -> retry otomatis), hard 180 dtk (bunuh paksa
+    # task yang mengabaikan soft limit). Worker yang crash tetap ditangkap
+    # stale-check (app/tasks/stale.py).
+    task_soft_time_limit=settings.job_soft_time_limit_seconds,
+    task_time_limit=settings.job_hard_time_limit_seconds,
+    # NFR-03: bila worker hilang (crash/reboot) di tengah task yang sudah
+    # di-ack, task dikirim ulang ke worker lain (bukan hilang selamanya).
+    task_reject_on_worker_lost=True,
+    task_acks_on_failure_or_timeout=False,
 )
 
 # Jadwal berkala (proses Celery Beat terpisah, lihat docker-compose

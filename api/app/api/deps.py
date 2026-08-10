@@ -28,3 +28,15 @@ async def get_current_user(
             detail="Akun tidak ditemukan atau dinonaktifkan",
         )
     return user
+
+
+async def require_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """FR-13: hanya admin (email di ADMIN_EMAILS) yang boleh lewat."""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akses khusus admin",
+        )
+    return current_user

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.ratelimit import rate_limit_dependency
 from app.core.security import (
     clear_auth_cookie,
     create_access_token,
@@ -34,6 +35,11 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 
+def _auth_rate_limit(scope: str):
+    """Dependency rate limit auth (NFR-04) — ambang dari settings per-request."""
+    return rate_limit_dependency(scope, lambda: settings.rate_limit_auth_per_minute)
+
+
 async def _get_user_by_email(db: AsyncSession, email: str) -> User | None:
     result = await db.execute(select(User).where(User.email == email.lower()))
     return result.scalar_one_or_none()
@@ -46,7 +52,10 @@ async def _get_user_by_email(db: AsyncSession, email: str) -> User | None:
     summary="Daftar akun baru",
 )
 async def register(
-    body: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)
+    body: RegisterRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_auth_rate_limit("auth:register")),
 ) -> User:
     # FR-07 (UU PDP): consent eksplisit wajib — tolak bila tidak disetujui.
     if not body.privacy_consent:
@@ -85,7 +94,10 @@ async def register(
     summary="Login email + password",
 )
 async def login(
-    body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)
+    body: LoginRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_auth_rate_limit("auth:login")),
 ) -> User:
     user = await _get_user_by_email(db, body.email)
     if user is None or not user.password_hash:

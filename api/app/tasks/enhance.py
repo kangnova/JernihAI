@@ -23,7 +23,7 @@ from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter
 
 from app.core.config import settings
-from app.core.quota import refund_quota
+from app.core.quota import refund_credit, refund_quota
 from app.db.session import async_session_factory
 from app.models.job import Job, JobStatus
 from app.models.user import User
@@ -276,11 +276,16 @@ async def process_job(
             job.status = JobStatus.FAILED.value
             job.error = str(exc)[:500]
             if refund_on_fail:
-                # FR-06: job gagal TIDAK menghabiskan kuota — kembalikan 1
-                # jatah (floor 0), digabung dalam transaksi status failed.
+                # FR-06/FR-11: job gagal TIDAK menghabiskan slot — kembalikan
+                # sesuai sumber pembayaran: kuota gratis (floor 0) atau 1
+                # kredit (bila job memakai kredit). Digabung dalam transaksi
+                # status failed.
                 user = await session.get(User, job.user_id)
                 if user is not None:
-                    refund_quota(user)
+                    if job.uses_credit:
+                        refund_credit(user)
+                    else:
+                        refund_quota(user)
         await session.commit()
         return job.status
 
@@ -419,6 +424,10 @@ def _enhance_real(job: Job) -> str:
     bind=True,
     max_retries=settings.job_max_retries,
     default_retry_delay=30,
+    # NFR-03: timeout per job — soft 120 dtk (hang -> failed -> retry),
+    # hard 180 dtk (bunuh paksa). Konsisten dengan default di worker.py.
+    soft_time_limit=settings.job_soft_time_limit_seconds,
+    time_limit=settings.job_hard_time_limit_seconds,
 )
 def process_enhancement(self, job_id: str) -> dict[str, str]:
     """Wrapper Celery (proses worker terpisah) — jalankan pipeline async.

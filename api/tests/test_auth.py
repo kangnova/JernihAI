@@ -4,6 +4,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.main import app
 from app.models.base import Base
@@ -12,7 +13,9 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
 @pytest.fixture()
-async def client():
+async def client(monkeypatch):
+    # NFR-04: rate limiting nonaktif di test — test khusus memicunya sendiri.
+    monkeypatch.setattr(settings, "rate_limit_enabled", False)
     engine = create_async_engine(TEST_DB_URL)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -182,3 +185,34 @@ async def test_logout_clears_cookie(client):
     resp = await client.post("/api/v1/auth/logout")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_register_rate_limited_after_threshold(client, monkeypatch):
+    """NFR-04: brute-force register dibatasi (429 setelah ambang)."""
+    monkeypatch.setattr(settings, "rate_limit_enabled", True)
+    monkeypatch.setattr(settings, "rate_limit_auth_per_minute", 3)
+    from app.core import ratelimit
+
+    ratelimit.reset()
+    for i in range(3):
+        resp = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": f"rl{i}@example.com",
+                "password": "password123",
+                "name": "R",
+                "privacy_consent": True,
+            },
+        )
+        assert resp.status_code == 201
+    resp = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "rl-extra@example.com",
+            "password": "password123",
+            "name": "R",
+            "privacy_consent": True,
+        },
+    )
+    assert resp.status_code == 429
+    assert "coba lagi" in resp.json()["detail"]

@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
-from app.core.quota import consume_quota, quota_remaining
+from app.core.quota import consume_slots, slots_available
+from app.core.ratelimit import rate_limit_dependency
 from app.core.storage import detect_image_format, resolve, save_upload
 from app.db.session import get_db
 from app.models.job import Job, JobStatus
@@ -26,6 +27,87 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 ALLOWED_SCALES = {2, 4}
 ALLOWED_FORMATS = {"webp", "jpeg", "png"}
 CONTENT_TYPES = {"webp": "image/webp", "jpeg": "image/jpeg", "png": "image/png"}
+# NFR-04: ambang upload per menit per IP (dibaca per request agar test
+# bisa mengubah via settings tanpa restart).
+_upload_rate_limit = rate_limit_dependency(
+    "jobs:upload", lambda: settings.rate_limit_upload_per_minute
+)
+
+
+def _validate_options(scale: int, output_format: str) -> None:
+    """Validasi opsi proses (scale/format) — raise 400 bila tidak dikenal."""
+    if scale not in ALLOWED_SCALES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"scale harus salah satu dari {sorted(ALLOWED_SCALES)}",
+        )
+    if output_format not in ALLOWED_FORMATS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"output_format harus salah satu dari {sorted(ALLOWED_FORMATS)}",
+        )
+
+
+async def _read_and_validate(file: UploadFile) -> tuple[bytes, str]:
+    """Baca file + validasi (kosong/ukuran/magic bytes); return (data, ext)."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="File kosong"
+        )
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=f"Ukuran maksimal {settings.max_upload_bytes // (1024 * 1024)} MB",
+        )
+    ext = detect_image_format(data)
+    if ext is None:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Hanya menerima JPG, PNG, atau WebP (validasi konten, bukan ekstensi)",
+        )
+    return data, ext
+
+
+def _build_job(
+    job_id: str,
+    current_user: User,
+    original_path: str,
+    original_name: str,
+    scale: int,
+    output_format: str,
+    face_enhance: bool,
+    denoise: bool,
+    color_enhance: bool,
+) -> Job:
+    """Buat Job dengan `job_id` yang SAMA dengan nama file original
+    (`save_upload` menamai file `<job_id>.<ext>` — jangan generate uuid
+    baru di sini, nanti path & id tidak cocok).
+    """
+    return Job(
+        id=job_id,
+        user_id=current_user.id,
+        scale=scale,
+        output_format=output_format,
+        face_enhance=face_enhance,
+        denoise=denoise,
+        color_enhance=color_enhance,
+        original_name=original_name,
+        original_path=original_path,
+    )
+
+
+async def _enqueue(job: Job, db: AsyncSession) -> None:
+    """Antrekan job: inline (eager dev/test) atau ke broker Redis."""
+    if settings.celery_task_always_eager:
+        await process_job(job.id)
+        await db.refresh(job)
+    else:
+        try:
+            process_enhancement.delay(job.id)
+        except Exception:
+            # Broker mati: job tetap tersimpan berstatus queued; retry manual/admin.
+            logger.warning("Gagal mengantre job %s ke broker Redis", job.id, exc_info=True)
 
 
 @router.post(
@@ -43,64 +125,34 @@ async def create_job(
     color_enhance: bool = Form(False),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _: None = Depends(_upload_rate_limit),
 ) -> Job:
-    if scale not in ALLOWED_SCALES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"scale harus salah satu dari {sorted(ALLOWED_SCALES)}",
-        )
-    if output_format not in ALLOWED_FORMATS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"output_format harus salah satu dari {sorted(ALLOWED_FORMATS)}",
-        )
+    _validate_options(scale, output_format)
 
-    # FR-06: cek kuota gratis SEBELUM membaca file — user yang sudah habis
-    # jatah tidak perlu mengunggah (hemat bandwidth & disk).
-    if quota_remaining(current_user) <= 0:
+    # FR-06/FR-11: cek slot (kuota gratis + kredit) SEBELUM membaca file —
+    # user yang kehabisan tidak perlu mengunggah (hemat bandwidth & disk).
+    if slots_available(current_user) <= 0:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
                 f"Kuota gratis harian sudah habis ({settings.free_daily_quota} "
-                "gambar/hari). Kuota reset otomatis besok (00:00 WIB)."
+                "gambar/hari) dan saldo kredit kosong. Reset kuota besok "
+                "(00:00 WIB) atau beli kredit di halaman Billing."
             ),
         )
 
-    data = await file.read()
-    if not data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="File kosong"
-        )
-    if len(data) > settings.max_upload_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail=f"Ukuran maksimal {settings.max_upload_bytes // (1024 * 1024)} MB",
-        )
-    ext = detect_image_format(data)
-    if ext is None:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Hanya menerima JPG, PNG, atau WebP (validasi konten, bukan ekstensi)",
-        )
-
+    data, ext = await _read_and_validate(file)
     job_id = str(uuid4())
     original_path = save_upload(data=data, job_id=job_id, ext=ext)
-    job = Job(
-        id=job_id,
-        user_id=current_user.id,
-        scale=scale,
-        output_format=output_format,
-        face_enhance=face_enhance,
-        denoise=denoise,
-        color_enhance=color_enhance,
-        original_name=file.filename or "gambar",
-        original_path=original_path,
+    job = _build_job(
+        job_id, current_user, original_path, file.filename or "gambar",
+        scale, output_format, face_enhance, denoise, color_enhance,
     )
+    # FR-06/FR-11: konsumsi 1 slot — kuota gratis dulu, kredit bila habis.
+    # Di-refund sesuai sumber saat job gagal (app/tasks/enhance.py).
+    _, credit_used = consume_slots(current_user, 1)
+    job.uses_credit = credit_used > 0
     db.add(job)
-    # FR-06: konsumsi 1 kuota saat job diterima (di-refund bila job gagal
-    # di app/tasks/enhance.py). Digabung dalam satu transaksi dengan insert
-    # job — commit di bawah.
-    consume_quota(current_user)
     try:
         await db.commit()
     except Exception:
@@ -109,18 +161,87 @@ async def create_job(
         raise
     await db.refresh(job)
 
-    if settings.celery_task_always_eager:
-        # Dev/test tanpa Redis: proses inline agar alur end-to-end bisa diverifikasi.
-        await process_job(job.id)
-        await db.refresh(job)
-    else:
-        try:
-            process_enhancement.delay(job.id)
-        except Exception:
-            # Broker mati: job tetap tersimpan berstatus queued; retry manual/admin.
-            logger.warning("Gagal mengantre job %s ke broker Redis", job.id, exc_info=True)
-
+    await _enqueue(job, db)
     return job
+
+
+@router.post(
+    "/batch",
+    response_model=JobListOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload beberapa gambar sekaligus (FR-12)",
+)
+async def create_batch_jobs(
+    files: list[UploadFile] = File(...),
+    scale: int = Form(2),
+    output_format: str = Form("webp"),
+    face_enhance: bool = Form(False),
+    denoise: bool = Form(False),
+    color_enhance: bool = Form(False),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(_upload_rate_limit),
+) -> JobListOut:
+    """Buat hingga `batch_max_files` job dalam satu request (FR-12).
+
+    Validasi SEMUA file dulu (sebelum simpan apa pun) agar request gagal
+    atomik: satu file tidak valid -> tidak ada job yang dibuat, kuota
+    tidak terpotong. Kuota dicek untuk total batch (FR-06).
+    """
+    if not 1 <= len(files) <= settings.batch_max_files:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Jumlah file harus 1–{settings.batch_max_files}",
+        )
+    _validate_options(scale, output_format)
+
+    if slots_available(current_user) < len(files):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Slot tidak cukup: batch ini butuh {len(files)} gambar, "
+                f"tersedia {slots_available(current_user)} "
+                "(kuota gratis + kredit). Beli kredit di halaman Billing."
+            ),
+        )
+
+    # Fase 1: baca + validasi semua file (data disimpan di memori, maks
+    # 10 x 10 MB = 100 MB — cukup untuk MVP).
+    staged: list[tuple[bytes, str, str]] = []
+    for f in files:
+        data, ext = await _read_and_validate(f)
+        staged.append((data, ext, f.filename or "gambar"))
+
+    # Fase 2: simpan semua + insert job + konsumsi slot (satu transaksi).
+    saved: list[str] = []
+    jobs: list[Job] = []
+    try:
+        # Slot gratis dipakai lebih dulu; sisanya dari kredit (FR-11).
+        free_used, _ = consume_slots(current_user, len(staged))
+        for idx, (data, ext, name) in enumerate(staged):
+            job_id = str(uuid4())
+            original_path = save_upload(data=data, job_id=job_id, ext=ext)
+            saved.append(original_path)
+            job = _build_job(
+                job_id, current_user, original_path, name,
+                scale, output_format, face_enhance, denoise, color_enhance,
+            )
+            job.uses_credit = idx >= free_used
+            db.add(job)
+            jobs.append(job)
+        await db.commit()
+    except Exception:
+        # Rollback transaksi + hapus file yatim bila commit gagal.
+        await db.rollback()
+        for path in saved:
+            resolve(path).unlink(missing_ok=True)
+        raise
+
+    # Fase 3: antrekan semua job (eager inline di dev/test).
+    for job in jobs:
+        await _enqueue(job, db)
+
+    return JobListOut(items=jobs, total=len(jobs))
 
 
 async def _get_owned_job(

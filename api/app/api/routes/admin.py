@@ -7,13 +7,15 @@ mengembalikan nol.
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin
-from app.core.quota import quota_limit
+from app.core.config import settings
+from app.core.quota import quota_limit, quota_remaining, wib_today
+from app.core.storage import delete_if_inside
 from app.db.session import get_db
 from app.models.job import Job, JobStatus
 from app.models.user import User
@@ -46,6 +48,38 @@ class AdminJobOut(BaseModel):
 class AdminJobList(BaseModel):
     items: list[AdminJobOut]
     total: int
+
+
+class AdminUserOut(BaseModel):
+    """Profil user + pemakaian kuota/kredit + jumlah riwayat (FR-13)."""
+    id: str
+    email: str
+    name: str | None
+    provider: str
+    is_active: bool
+    created_at: str | None
+    privacy_consent_at: str | None
+    quota_used: int
+    quota_limit: int
+    quota_remaining: int
+    credit_balance: int
+    job_count: int
+
+
+class AdminUserList(BaseModel):
+    items: list[AdminUserOut]
+    total: int
+
+
+class QuotaResetRequest(BaseModel):
+    """Target reset kuota: `email` satu user ATAU `all=true` (semua)."""
+    email: str | None = None
+    all: bool = False
+
+
+class QuotaResetOut(BaseModel):
+    reset: int
+    email: str | None
 
 
 @router.get(
@@ -103,18 +137,33 @@ async def admin_stats(
 async def admin_jobs(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    email: str | None = Query(None, max_length=255),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> AdminJobList:
-    """Daftar job semua user (terbaru dulu) — untuk monitoring operasional."""
+    """Daftar job (terbaru dulu) — semua user atau riwayat SATU user (`email`).
+
+    `email` = pencocokan persis (email unik) — dipakai admin melihat
+    riwayat lengkap milik user tertentu.
+    """
     total = await db.scalar(select(func.count()).select_from(Job)) or 0
-    rows = await db.execute(
+    rows_query = (
         select(Job, User.email)
         .join(User, Job.user_id == User.id, isouter=True)
         .order_by(Job.created_at.desc(), Job.id.desc())
-        .offset(offset)
-        .limit(limit)
     )
+    if email:
+        total = (
+            await db.scalar(
+                select(func.count())
+                .select_from(Job)
+                .join(User, Job.user_id == User.id, isouter=True)
+                .where(User.email == email)
+            )
+            or 0
+        )
+        rows_query = rows_query.where(User.email == email)
+    rows = await db.execute(rows_query.offset(offset).limit(limit))
     items = [
         AdminJobOut(
             id=job.id,
@@ -130,3 +179,149 @@ async def admin_jobs(
         for job, email in rows.all()
     ]
     return AdminJobList(items=items, total=total)
+
+
+@router.get(
+    "/users",
+    response_model=AdminUserList,
+    summary="Daftar user + kuota & kredit (FR-13)",
+)
+async def admin_users(
+    email: str | None = Query(None, max_length=255),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> AdminUserList:
+    """Direktori user: email, nama, provider, kuota gratis (FR-06), saldo
+    kredit (FR-11), consent privasi (FR-07), dan jumlah riwayat job.
+
+    `email` = pencarian parsial (ilike); urut terbaru dulu.
+    """
+    filters = [User.email.ilike(f"%{email}%")] if email else []
+    total = (
+        await db.scalar(select(func.count()).select_from(User).where(*filters)) or 0
+    )
+    users = (
+        await db.execute(
+            select(User)
+            .where(*filters)
+            .order_by(User.created_at.desc(), User.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).scalars()
+
+    job_counts = dict(
+        (
+            await db.execute(
+                select(Job.user_id, func.count()).group_by(Job.user_id)
+            )
+        ).all()
+    )
+
+    items: list[AdminUserOut] = []
+    for user in users:
+        # quota_remaining menjalankan lazy reset WIB bila ganti hari —
+        # di-commit agar tampilan konsisten dengan logika FR-06.
+        remaining = quota_remaining(user)
+        items.append(
+            AdminUserOut(
+                id=user.id,
+                email=user.email,
+                name=user.name,
+                provider=user.provider,
+                is_active=user.is_active,
+                created_at=user.created_at.isoformat() if user.created_at else None,
+                privacy_consent_at=(
+                    user.privacy_consent_at.isoformat()
+                    if user.privacy_consent_at
+                    else None
+                ),
+                quota_used=user.free_daily_quota_used or 0,
+                quota_limit=quota_limit(),
+                quota_remaining=remaining,
+                credit_balance=user.credit_balance or 0,
+                job_count=job_counts.get(user.id, 0),
+            )
+        )
+    await db.commit()  # persist lazy reset kuota
+    return AdminUserList(items=items, total=total)
+
+
+@router.post(
+    "/quota/reset",
+    response_model=QuotaResetOut,
+    summary="Reset kuota gratis user (alat admin)",
+)
+async def admin_quota_reset(
+    body: QuotaResetRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> QuotaResetOut:
+    """Reset pemakaian kuota gratis (FR-06) untuk satu user atau semua.
+
+    Alat untuk pengelola/pengembang saat uji coba: set `used=0` dan tanggal
+    reset ke hari ini (WIB) — tanpa mengubah limit dari env.
+    """
+    if not body.email and not body.all:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tentukan `email` (satu user) atau `all=true` (semua user)",
+        )
+
+    today = wib_today().isoformat()
+
+    if body.email:
+        user = await db.scalar(select(User).where(User.email == body.email))
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User tidak ditemukan: {body.email}",
+            )
+        user.free_daily_quota_used = 0
+        user.free_quota_date = today
+        await db.commit()
+        return QuotaResetOut(reset=1, email=body.email)
+
+    # Reset semua user (dev/uji coba) — lazy reset membuat used=0 aman.
+    users = (await db.execute(select(User))).scalars()
+    count = 0
+    for user in users:
+        user.free_daily_quota_used = 0
+        user.free_quota_date = today
+        count += 1
+    await db.commit()
+    return QuotaResetOut(reset=count, email=None)
+
+
+@router.delete(
+    "/jobs/{job_id}",
+    summary="Hapus job + file-nya (alat admin)",
+)
+async def admin_delete_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> dict[str, object]:
+    """Hapus permanen job (baris DB + file original & hasil di disk).
+
+    File hanya dihapus bila berada di dalam upload_dir/result_dir (guard
+    path traversal via `delete_if_inside`). Dipakai pengelola membersihkan
+    data uji coba.
+    """
+    job = await db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Job tidak ditemukan"
+        )
+
+    files_deleted = 0
+    if delete_if_inside(job.original_path, settings.upload_dir):
+        files_deleted += 1
+    if delete_if_inside(job.result_path, settings.result_dir):
+        files_deleted += 1
+
+    await db.delete(job)
+    await db.commit()
+    return {"deleted": True, "id": job_id, "files_deleted": files_deleted}

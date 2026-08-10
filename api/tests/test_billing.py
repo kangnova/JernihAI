@@ -57,6 +57,7 @@ async def db(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "celery_task_always_eager", True)
     monkeypatch.setattr(settings, "enhance_backend", "mock")
     monkeypatch.setattr(settings, "rate_limit_enabled", False)  # NFR-04
+    monkeypatch.setattr(settings, "free_daily_quota", 3)  # deterministik (bukan .env dev)
     # Dev tanpa gateway: checkout mengembalikan token mock.
     monkeypatch.setattr(settings, "midtrans_server_key", TEST_SERVER_KEY)
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))

@@ -44,6 +44,7 @@ async def db(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "celery_task_always_eager", True)
     monkeypatch.setattr(settings, "enhance_backend", "mock")  # Fase 2: tanpa ML lokal
     monkeypatch.setattr(settings, "rate_limit_enabled", False)  # NFR-04
+    monkeypatch.setattr(settings, "free_daily_quota", 3)  # deterministik (bukan .env dev)
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
     monkeypatch.setattr(settings, "result_dir", str(tmp_path / "results"))
     # Sesi yang dipakai task = sesi yang sama dengan route (DB test).

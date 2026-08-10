@@ -252,9 +252,66 @@ export async function getAdminStats(): Promise<AdminStats> {
 export async function listAdminJobs(
   limit = 20,
   offset = 0,
+  email?: string,
 ): Promise<{ items: AdminJob[]; total: number }> {
+  const q = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (email) q.set("email", email);
   return apiFetch<{ items: AdminJob[]; total: number }>(
-    `/api/v1/admin/jobs?limit=${limit}&offset=${offset}`,
+    `/api/v1/admin/jobs?${q.toString()}`,
+  );
+}
+
+// Direktori user untuk admin (FR-13): email, kuota gratis, kredit, consent,
+// dan jumlah riwayat job.
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string | null;
+  provider: string;
+  is_active: boolean;
+  created_at: string | null;
+  privacy_consent_at: string | null;
+  quota_used: number;
+  quota_limit: number;
+  quota_remaining: number;
+  credit_balance: number;
+  job_count: number;
+}
+
+export async function listAdminUsers(
+  email?: string,
+  limit = 20,
+  offset = 0,
+): Promise<{ items: AdminUser[]; total: number }> {
+  const q = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (email) q.set("email", email);
+  return apiFetch<{ items: AdminUser[]; total: number }>(
+    `/api/v1/admin/users?${q.toString()}`,
+  );
+}
+
+// Alat admin (pengelola/pengembang): reset kuota gratis & hapus job uji.
+export interface AdminQuotaResetResult {
+  reset: number;
+  email: string | null;
+}
+
+export async function resetAdminQuota(input: {
+  email?: string;
+  all?: boolean;
+}): Promise<AdminQuotaResetResult> {
+  return apiFetch<AdminQuotaResetResult>("/api/v1/admin/quota/reset", {
+    method: "POST",
+    body: JSON.stringify({ email: input.email ?? null, all: input.all ?? false }),
+  });
+}
+
+export async function deleteAdminJob(
+  jobId: string,
+): Promise<{ deleted: boolean; id: string; files_deleted: number }> {
+  return apiFetch<{ deleted: boolean; id: string; files_deleted: number }>(
+    `/api/v1/admin/jobs/${jobId}`,
+    { method: "DELETE" },
   );
 }
 

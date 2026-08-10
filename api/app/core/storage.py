@@ -39,3 +39,24 @@ def save_upload(data: bytes, job_id: str, ext: str) -> str:
 def resolve(rel_path: str) -> Path:
     """Konversi path relatif dari DB menjadi Path absolut kerja."""
     return Path(rel_path)
+
+
+def delete_if_inside(rel_path: str | None, base_dir: str) -> bool:
+    """Hapus file bila berada di dalam base_dir (guard path traversal).
+
+    Dipakai admin (hapus job) & retensi (FR-07) — file hanya boleh dihapus
+    bila path-nya benar-benar di dalam `upload_dir`/`result_dir`, supaya
+    path menyimpang dari DB tidak bisa menghapus file arbitrer.
+    """
+    if not rel_path:
+        return False
+    try:
+        resolved = Path(rel_path).resolve()
+        base = Path(base_dir).resolve()
+        if resolved.is_relative_to(base) and resolved.is_file():
+            resolved.unlink(missing_ok=True)
+            return True
+    except OSError:
+        # File lock / akses ditolak — jangan crash endpoint, cukup False.
+        return False
+    return False

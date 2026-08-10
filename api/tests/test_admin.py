@@ -36,6 +36,7 @@ async def db(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "celery_task_always_eager", True)
     monkeypatch.setattr(settings, "enhance_backend", "mock")
     monkeypatch.setattr(settings, "rate_limit_enabled", False)  # NFR-04
+    monkeypatch.setattr(settings, "free_daily_quota", 3)  # deterministik (bukan .env dev)
     monkeypatch.setattr(settings, "admin_emails", [])  # default non-admin
     monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
     monkeypatch.setattr(settings, "result_dir", str(tmp_path / "results"))
@@ -143,3 +144,175 @@ async def test_admin_me_exposes_is_admin(client, monkeypatch):
     await _register(client, "biasa@example.com")
     me = (await client.get("/api/v1/auth/me")).json()
     assert me["is_admin"] is False
+
+
+# --- Alat admin: reset kuota & hapus job uji ---
+
+
+async def _quota_used(client) -> int:
+    return (await client.get("/api/v1/quota")).json()["used"]
+
+
+async def test_admin_quota_reset_single_user(client, monkeypatch):
+    """Reset kuota satu user via email — admin only."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "sasaran@example.com")
+    await _upload(client)  # sasaran pakai 1 kuota
+    assert await _quota_used(client) == 1
+    await _login(client, "boss@example.com")
+
+    resp = await client.post(
+        "/api/v1/admin/quota/reset",
+        json={"email": "sasaran@example.com"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"reset": 1, "email": "sasaran@example.com"}
+
+    await _login(client, "sasaran@example.com")
+    assert await _quota_used(client) == 0
+
+
+async def test_admin_quota_reset_all_users(client, monkeypatch):
+    """all=true mereset SEMUA user."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "a@example.com")
+    await _register(client, "b@example.com")
+    for _ in range(2):
+        await _upload(client)
+    await _login(client, "boss@example.com")
+
+    resp = await client.post("/api/v1/admin/quota/reset", json={"all": True})
+    assert resp.status_code == 200
+    assert resp.json()["reset"] == 3
+
+
+async def test_admin_quota_reset_requires_email_or_all(client, monkeypatch):
+    """Tanpa email & tanpa all -> 400."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _login(client, "boss@example.com")
+
+    resp = await client.post("/api/v1/admin/quota/reset", json={})
+    assert resp.status_code == 400
+
+
+async def test_admin_quota_reset_unknown_email_404(client, monkeypatch):
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _login(client, "boss@example.com")
+
+    resp = await client.post(
+        "/api/v1/admin/quota/reset", json={"email": "ghost@example.com"}
+    )
+    assert resp.status_code == 404
+
+
+async def test_admin_delete_job_removes_row_and_files(db, client, monkeypatch, tmp_path):
+    """Hapus job admin: baris DB + file original & hasil hilang dari disk."""
+    from pathlib import Path
+
+    from app.models.job import Job
+
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "korban@example.com")
+    resp = await client.post(
+        "/api/v1/jobs",
+        files={"file": ("foto.png", _image_bytes(), "image/png")},
+        data={"scale": "2", "output_format": "webp"},
+    )
+    job_id = resp.json()["id"]
+    orig = Path(settings.upload_dir) / f"{job_id}.png"
+    result = Path(settings.result_dir) / f"{job_id}.webp"
+    assert orig.exists() and result.exists()
+
+    await _login(client, "boss@example.com")
+    resp = await client.delete(f"/api/v1/admin/jobs/{job_id}")
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] is True
+    assert resp.json()["files_deleted"] == 2
+
+    # Baris & file hilang.
+    async with db() as session:
+        assert await session.get(Job, job_id) is None
+    assert not orig.exists() and not result.exists()
+
+    # Hapus lagi -> 404.
+    resp = await client.delete(f"/api/v1/admin/jobs/{job_id}")
+    assert resp.status_code == 404
+
+
+async def test_admin_tools_denied_for_regular_user(client):
+    """User biasa tidak boleh reset kuota / hapus job."""
+    await _register(client)
+    resp = await client.post("/api/v1/admin/quota/reset", json={"all": True})
+    assert resp.status_code == 403
+    resp = await client.delete("/api/v1/admin/jobs/whatever")
+    assert resp.status_code == 403
+    resp = await client.get("/api/v1/admin/users")
+    assert resp.status_code == 403
+
+
+# --- Direktori user: email, kuota, kredit, consent, jumlah riwayat ---
+
+
+async def test_admin_users_lists_details(client, monkeypatch):
+    """Admin melihat email/kuota/kredit/consent/job_count tiap user."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "target@example.com")
+    await _upload(client)  # 1 job atas nama target
+    await _login(client, "boss@example.com")
+
+    resp = await client.get("/api/v1/admin/users")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+
+    target = next(u for u in body["items"] if u["email"] == "target@example.com")
+    assert target["quota_used"] == 1
+    assert target["quota_limit"] == 3
+    assert target["quota_remaining"] == 2
+    assert target["credit_balance"] == 0
+    assert target["job_count"] == 1
+    assert target["privacy_consent_at"] is not None
+    assert target["provider"] == "local"
+
+
+async def test_admin_users_search_by_email(client, monkeypatch):
+    """Pencarian parsial email di direktori user."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "alfa@example.com")
+    await _register(client, "beta@example.com")
+    await _login(client, "boss@example.com")
+
+    resp = await client.get("/api/v1/admin/users?email=beta")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["email"] == "beta@example.com"
+
+
+async def test_admin_jobs_filtered_by_email(client, monkeypatch):
+    """Riwayat SATU user via filter email di GET /admin/jobs."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "korban@example.com")
+    await _upload(client)  # job korban
+    await _upload(client)  # job korban kedua
+    await _login(client, "boss@example.com")
+    # Satu job tambahan atas nama boss.
+    await _login(client, "boss@example.com")
+
+    resp = await client.get("/api/v1/admin/jobs?email=korban@example.com")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert all(i["user_email"] == "korban@example.com" for i in body["items"])
+
+    # Tanpa filter = semua.
+    resp = await client.get("/api/v1/admin/jobs")
+    assert resp.json()["total"] == 2

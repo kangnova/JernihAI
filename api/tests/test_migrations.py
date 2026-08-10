@@ -33,6 +33,9 @@ JOB_COLS = {
     "uses_credit",
     "original_deleted_at",
     "result_deleted_at",
+    # Migrasi 0002 (contoh autogenerate): kolom baru harus ikut terdeteksi
+    # di rantai upgrade 0001 -> 0002 (bukti alur autogenerate jalan).
+    "admin_notes",
 }
 TXN_COLS = {"order_id", "credits", "amount_idr", "status", "paid_at"}
 

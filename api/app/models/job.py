@@ -45,6 +45,10 @@ class Job(Base):
     original_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     result_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(String(500))
+    # Contoh kolom untuk demo alur `alembic revision --autogenerate`
+    # (ADR-011) — bukan fitur produksi; dimaksudkan untuk catatan manual
+    # admin pada job bermasalah (nullable, tanpa default → backfill aman).
+    admin_notes: Mapped[str | None] = mapped_column(String(500))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

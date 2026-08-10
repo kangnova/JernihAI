@@ -74,7 +74,8 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # B008: pemanggilan fungsi di default arg (pola umum FastAPI: Depends(...))
 ignore = ["B008"]
 
-# E501 di migrasi Alembic: kolom ORM (terutama server_default) sering
-# melebihi 100 kolom dan gaya baris panjang itu memang bawaan Alembic.
+# Migrasi Alembic: hasil `revision --autogenerate` memakai gaya bawaan
+# (E501 baris panjang, UP typing lama) — jangan diubah-ubah agar diff
+# dengan autogenerate berikutnya tetap bersih.
 [tool.ruff.lint.per-file-ignores]
-"migrations/versions/*.py" = ["E501"]
+"migrations/versions/*.py" = ["E501", "UP"]

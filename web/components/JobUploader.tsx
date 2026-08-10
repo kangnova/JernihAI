@@ -96,6 +96,11 @@ export function JobUploader() {
   const [job, setJob] = useState<Job | null>(null); // alur 1 gambar
   const [batchJobs, setBatchJobs] = useState<Job[] | null>(null); // FR-12
   const [afterUrl, setAfterUrl] = useState<string | null>(null);
+  // Dimensi asli vs hasil (dibaca dari blob) — bukti visual peningkatan.
+  const [dims, setDims] = useState<{
+    before: [number, number] | null;
+    after: [number, number] | null;
+  }>({ before: null, after: null });
   const [dragging, setDragging] = useState(false);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -121,19 +126,39 @@ export function JobUploader() {
     return () => URL.revokeObjectURL(url);
   }, [files]);
 
+  // Ambil blob hasil → afterUrl. Dipakai saat job sudah selesai saat respons
+  // tiba (mode eager dev: CELERY_TASK_ALWAYS_EAGER) maupun saat transisi
+  // dari polling.
+  const loadResult = useCallback((jobId: string) => {
+    fetchJobResult(jobId)
+      .then((blob) => setAfterUrl(URL.createObjectURL(blob)))
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : "Gagal mengunduh hasil"),
+      );
+  }, []);
+
   // Polling status job tunggal sampai selesai, lalu ambil blob hasil.
+  // Mode eager (dev lokal): respons upload SUDAH `completed` — hasil diambil
+  // segera tanpa menunggu transisi status.
   useEffect(() => {
-    if (!job || job.status === "completed" || job.status === "failed") return;
+    if (!job) return;
+    if (job.status === "failed") {
+      // Job gagal -> kuota di-refund server; refresh badge biar akurat.
+      getQuota()
+        .then(setQuota)
+        .catch(() => {});
+      return;
+    }
+    if (job.status === "completed") {
+      loadResult(job.id);
+      return;
+    }
     const timer = setInterval(async () => {
       try {
         const updated = await getJob(job.id);
         setJob(updated);
-        if (updated.status === "completed") {
-          const blob = await fetchJobResult(updated.id);
-          setAfterUrl(URL.createObjectURL(blob));
-        }
+        if (updated.status === "completed") loadResult(updated.id);
         if (updated.status === "failed") {
-          // Job gagal -> kuota di-refund server; refresh badge biar akurat.
           getQuota()
             .then(setQuota)
             .catch(() => {});
@@ -143,7 +168,20 @@ export function JobUploader() {
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [job]);
+  }, [job, loadResult]);
+
+  // Baca dimensi asli & hasil dari blob (bukti resolusi berlipat).
+  useEffect(() => {
+    if (!beforeUrl || !afterUrl) return;
+    const read = (url: string, key: "before" | "after") => {
+      const img = new Image();
+      img.onload = () =>
+        setDims((d) => ({ ...d, [key]: [img.naturalWidth, img.naturalHeight] }));
+      img.src = url;
+    };
+    read(beforeUrl, "before");
+    read(afterUrl, "after");
+  }, [beforeUrl, afterUrl]);
 
   // Polling status job batch (FR-12): refresh per job yang masih berjalan.
   useEffect(() => {
@@ -227,6 +265,7 @@ export function JobUploader() {
     setJob(null);
     setBatchJobs(null);
     setAfterUrl(null);
+    setDims({ before: null, after: null });
     setError(null);
   }
 
@@ -404,13 +443,26 @@ export function JobUploader() {
           </div>
         ) : files.length === 1 ? (
           <div className="flex items-center justify-center gap-4">
-            {/* Blob URL lokal — tidak bisa dioptimasi next/image */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={beforeUrl ?? ""}
-              alt="Pratinjau"
-              className="h-24 w-24 rounded-xl border border-white/10 object-cover"
-            />
+            {/* Preview hanya dirender saat object URL siap (useEffect setelah
+                render) — menghindari src="" yang memicu warning Next. */}
+            {beforeUrl ? (
+              <>
+                {/* Blob URL lokal — tidak bisa dioptimasi next/image */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={beforeUrl}
+                  alt="Pratinjau"
+                  className="h-24 w-24 rounded-xl border border-white/10 object-cover"
+                />
+              </>
+            ) : (
+              <div
+                aria-hidden
+                className="grid h-24 w-24 place-items-center rounded-xl border border-white/10 bg-white/5 text-xs text-slate-500"
+              >
+                …
+              </div>
+            )}
             <div className="text-left">
               <p className="font-medium text-slate-100">{files[0].name}</p>
               <p className="text-sm text-slate-400">
@@ -581,7 +633,26 @@ export function JobUploader() {
       {/* Hasil — 1 gambar: before-after slider + download */}
       {job?.status === "completed" && beforeUrl && afterUrl && (
         <div className="space-y-4">
-          <BeforeAfterSlider beforeUrl={beforeUrl} afterUrl={afterUrl} />
+          <BeforeAfterSlider
+            beforeUrl={beforeUrl}
+            afterUrl={afterUrl}
+            beforeLabel={
+              dims.before
+                ? `Sebelum · ${dims.before[0]}×${dims.before[1]}`
+                : "Sebelum"
+            }
+            afterLabel={
+              dims.after
+                ? `Sesudah · ${dims.after[0]}×${dims.after[1]}`
+                : "Sesudah"
+            }
+          />
+          {/* Bukti peningkatan: resolusi berlipat sesuai skala (FR-03) */}
+          <p className="text-center text-sm text-slate-400">
+            {dims.before && dims.after
+              ? `Resolusi: ${dims.before[0]}×${dims.before[1]} → ${dims.after[0]}×${dims.after[1]} (${job.scale}×, ${job.output_format.toUpperCase()})`
+              : `Diperbesar ${job.scale}× — format ${job.output_format.toUpperCase()}`}
+          </p>
           <div className="flex flex-col gap-3 sm:flex-row">
             <button
               type="button"

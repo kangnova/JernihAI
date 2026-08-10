@@ -359,6 +359,51 @@ async def test_admin_user_detail_denied_for_regular_user(client):
     assert resp.status_code == 403
     resp = await client.get("/api/v1/admin/users/some-id/transactions")
     assert resp.status_code == 403
+    resp = await client.delete("/api/v1/admin/users/some-id/jobs")
+    assert resp.status_code == 403
+
+
+async def test_admin_delete_all_user_jobs(db, client, monkeypatch, tmp_path):
+    """Hapus SEMUA job satu user + file di disk — job user lain tidak tersentuh."""
+    from pathlib import Path
+
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "korban@example.com")
+    await _upload(client)  # job korban 1
+    await _upload(client)  # job korban 2
+    await _register(client, "lain@example.com")
+    await _upload(client)  # job milik user lain
+    await _login(client, "boss@example.com")
+
+    korban_id = await _user_id_by_email(client, "korban@example.com")
+    korban_jobs = (await client.get("/api/v1/admin/jobs?email=korban@example.com")).json()
+    korban_job_ids = [i["id"] for i in korban_jobs["items"]]
+    lain_jobs = (await client.get("/api/v1/admin/jobs?email=lain@example.com")).json()
+    lain_job_ids = [i["id"] for i in lain_jobs["items"]]
+    # File korban ada di disk sebelum dihapus.
+    korban_files = [
+        Path(settings.upload_dir) / f"{jid}.png" for jid in korban_job_ids
+    ] + [Path(settings.result_dir) / f"{jid}.webp" for jid in korban_job_ids]
+    assert all(f.exists() for f in korban_files)
+
+    resp = await client.delete(f"/api/v1/admin/users/{korban_id}/jobs")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"deleted": 2, "files_deleted": 4, "user_id": korban_id}
+
+    # Job & file korban hilang; job user lain utuh.
+    assert all(not f.exists() for f in korban_files)
+    resp = await client.get("/api/v1/admin/jobs?email=korban@example.com")
+    assert resp.json()["total"] == 0
+    resp = await client.get("/api/v1/admin/jobs?email=lain@example.com")
+    assert resp.json()["total"] == 1
+    lain_file = Path(settings.upload_dir) / f"{lain_job_ids[0]}.png"
+    assert lain_file.exists()
+
+    # User tak dikenal -> 404.
+    resp = await client.delete("/api/v1/admin/users/tidak-ada/jobs")
+    assert resp.status_code == 404
 
 
 async def test_admin_user_transactions(db, client, monkeypatch):

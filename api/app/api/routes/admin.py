@@ -397,6 +397,18 @@ async def admin_quota_reset(
     return QuotaResetOut(reset=count, email=None)
 
 
+def _delete_job_files(job: Job) -> int:
+    """Hapus file original & hasil job dari disk (guard path traversal).
+    Mengembalikan jumlah file yang berhasil dihapus.
+    """
+    files_deleted = 0
+    if delete_if_inside(job.original_path, settings.upload_dir):
+        files_deleted += 1
+    if delete_if_inside(job.result_path, settings.result_dir):
+        files_deleted += 1
+    return files_deleted
+
+
 @router.delete(
     "/jobs/{job_id}",
     summary="Hapus job + file-nya (alat admin)",
@@ -418,12 +430,38 @@ async def admin_delete_job(
             status_code=status.HTTP_404_NOT_FOUND, detail="Job tidak ditemukan"
         )
 
-    files_deleted = 0
-    if delete_if_inside(job.original_path, settings.upload_dir):
-        files_deleted += 1
-    if delete_if_inside(job.result_path, settings.result_dir):
-        files_deleted += 1
-
+    files_deleted = _delete_job_files(job)
     await db.delete(job)
     await db.commit()
     return {"deleted": True, "id": job_id, "files_deleted": files_deleted}
+
+
+@router.delete(
+    "/users/{user_id}/jobs",
+    summary="Hapus SEMUA job user + file-nya (alat admin)",
+)
+async def admin_delete_user_jobs(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> dict[str, object]:
+    """Hapus permanen SEMUA job milik satu user (baris DB + file di disk).
+
+    Dipakai halaman detail admin untuk membersihkan data uji coba satu
+    user sekaligus — job milik user lain tidak tersentuh.
+    """
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User tidak ditemukan"
+        )
+
+    jobs = list(
+        (await db.execute(select(Job).where(Job.user_id == user.id))).scalars()
+    )
+    files_deleted = 0
+    for job in jobs:
+        files_deleted += _delete_job_files(job)
+        await db.delete(job)
+    await db.commit()
+    return {"deleted": len(jobs), "files_deleted": files_deleted, "user_id": user_id}

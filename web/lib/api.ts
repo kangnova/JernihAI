@@ -344,6 +344,16 @@ export async function deleteAdminJob(
   );
 }
 
+// Hapus SEMUA job milik satu user + file-nya (halaman detail admin).
+export async function deleteAdminUserJobs(
+  userId: string,
+): Promise<{ deleted: number; files_deleted: number; user_id: string }> {
+  return apiFetch<{ deleted: number; files_deleted: number; user_id: string }>(
+    `/api/v1/admin/users/${userId}/jobs`,
+    { method: "DELETE" },
+  );
+}
+
 // --- Billing & kredit (FR-11 — Midtrans) ---
 
 export interface BillingPackage {

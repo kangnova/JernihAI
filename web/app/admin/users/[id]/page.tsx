@@ -7,9 +7,11 @@ import { useCallback, useEffect, useState } from "react";
 import type { AdminJob, AdminTransaction, AdminUser } from "@/lib/api";
 import {
   deleteAdminJob,
+  deleteAdminUserJobs,
   getAdminUser,
   listAdminJobs,
   listAdminUserTransactions,
+  resetAdminQuota,
 } from "@/lib/api";
 import {
   STATUS_LABEL,
@@ -30,7 +32,10 @@ export default function AdminUserDetailPage() {
   const [txns, setTxns] = useState<AdminTransaction[] | null>(null);
   const [txnsTotal, setTxnsTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
+  const [busyReset, setBusyReset] = useState(false);
+  const [busyDeleteAll, setBusyDeleteAll] = useState(false);
 
   const loadUser = useCallback(async () => {
     const u = await getAdminUser(id);
@@ -77,11 +82,55 @@ export default function AdminUserDetailPage() {
   async function handleDeleteJob(j: AdminJob) {
     if (!window.confirm(`Hapus job "${j.original_name}" beserta file-nya?`)) return;
     setBusyJobId(j.id);
+    setActionMsg(null);
     try {
       await deleteAdminJob(j.id);
-      if (profile) await loadJobs(profile.email);
+      setActionMsg(`Job ${j.original_name} dihapus.`);
+      if (profile) {
+        await Promise.all([loadJobs(profile.email), loadUser()]); // job_count ikut refresh
+      }
+    } catch (err) {
+      setActionMsg(`Gagal hapus: ${err instanceof Error ? err.message : "kesalahan"}`);
     } finally {
       setBusyJobId(null);
+    }
+  }
+
+  async function handleResetQuota() {
+    if (!profile) return;
+    setBusyReset(true);
+    setActionMsg(null);
+    try {
+      const res = await resetAdminQuota({ email: profile.email });
+      await loadUser();
+      setActionMsg(`Kuota ${res.email} di-reset (${res.reset} user).`);
+    } catch (err) {
+      setActionMsg(
+        `Gagal reset: ${err instanceof Error ? err.message : "kesalahan"}`,
+      );
+    } finally {
+      setBusyReset(false);
+    }
+  }
+
+  async function handleDeleteAllJobs() {
+    if (!profile) return;
+    if (
+      !window.confirm(
+        `Hapus SEMUA ${jobs?.length ?? 0} job milik ${profile.email} beserta file-nya?`,
+      )
+    )
+      return;
+    setBusyDeleteAll(true);
+    setActionMsg(null);
+    try {
+      const res = await deleteAdminUserJobs(profile.id);
+      await Promise.all([loadJobs(profile.email), loadUser()]);
+      setActionMsg(`${res.deleted} job dihapus (${res.files_deleted} file).`);
+    } catch (err) {
+      setActionMsg(`Gagal hapus: ${err instanceof Error ? err.message : "kesalahan"}`);
+    } finally {
+      setBusyDeleteAll(false);
     }
   }
 
@@ -140,7 +189,8 @@ export default function AdminUserDetailPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2 text-xs">
+                <div className="flex flex-col items-start gap-2 sm:items-end">
+                  <div className="flex flex-wrap gap-2 text-xs">
                   <span
                     className={`rounded-full border px-2 py-1 ${
                       profile.quota_remaining > 0
@@ -165,18 +215,42 @@ export default function AdminUserDetailPage() {
                       ? `Consent ✓ ${formatDate(profile.privacy_consent_at)}`
                       : "Tanpa consent"}
                   </span>
-                  <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-slate-300">
-                    {profile.job_count} job
-                  </span>
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-slate-300">
+                      {profile.job_count} job
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResetQuota}
+                    disabled={busyReset}
+                    className="rounded-lg border border-indigo-400/30 bg-indigo-500/10 px-3 py-1.5 text-sm font-medium text-indigo-300 transition-colors hover:bg-indigo-500/20 disabled:opacity-40"
+                  >
+                    {busyReset ? "…" : "Reset kuota"}
+                  </button>
                 </div>
               </div>
+              {actionMsg && (
+                <p className="mt-3 text-sm text-slate-300">{actionMsg}</p>
+              )}
             </div>
 
             {/* Riwayat job user */}
             <div className="mt-8">
-              <h2 className="mb-3 text-lg font-semibold">
-                Riwayat job ({jobs?.length ?? 0})
-              </h2>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold">
+                  Riwayat job ({jobs?.length ?? 0})
+                </h2>
+                {jobs && jobs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleDeleteAllJobs}
+                    disabled={busyDeleteAll}
+                    className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-sm font-medium text-rose-300 transition-colors hover:bg-rose-500/20 disabled:opacity-40"
+                  >
+                    {busyDeleteAll ? "…" : "Hapus semua job"}
+                  </button>
+                )}
+              </div>
               {jobs === null ? (
                 <p className="text-slate-400">Memuat…</p>
               ) : jobs.length === 0 ? (

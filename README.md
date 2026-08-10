@@ -13,6 +13,7 @@ Monorepo platform web untuk peningkatan kualitas foto/gambar (super-resolution, 
 | `samples/` | Set uji gambar sintetis (hasil generate script) |
 | `DECISIONS.md` | Log keputusan arsitektur Fase 0 (ADR ringan) |
 | `docs/DEPLOY_VAST.md` | Runbook deploy & smoke test worker GPU di Vast.ai |
+| `docs/DEPLOY_PRODUKSI.md` | Runbook deploy full-stack ke produksi + aktivasi pembayaran Midtrans (FR-11) & admin (FR-13) |
 | `docs/GUIDE_VAST_ACCOUNT.md` | Panduan lengkap: buat akun Vast.ai, isi saldo, SSH key, CLI, integrasi |
 | `docs/RUNBOOK_GPU_PERTAMA.md` | Checklist langkah konkret: sewa GPU pertama (rent → smoke test → destroy) |
 

@@ -11,3 +11,21 @@ services:
   worker-gpu:
     volumes:
       - ./api:/app
+
+  # FR-07: Celery Beat — sweep retensi data (original 24 jam, hasil 7 hari).
+  # Wajib ikut berjalan agar auto-delete aktif di produksi Vast.ai.
+  beat:
+    build: ./api
+    command: celery -A app.tasks.worker.celery_app beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-jernihai}:${POSTGRES_PASSWORD:-jernihai}@db:5432/${POSTGRES_DB:-jernihai}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    volumes:
+      - ./api:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy

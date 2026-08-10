@@ -16,6 +16,43 @@ Monorepo platform web untuk peningkatan kualitas foto/gambar (super-resolution, 
 | `docs/GUIDE_VAST_ACCOUNT.md` | Panduan lengkap: buat akun Vast.ai, isi saldo, SSH key, CLI, integrasi |
 | `docs/RUNBOOK_GPU_PERTAMA.md` | Checklist langkah konkret: sewa GPU pertama (rent → smoke test → destroy) |
 
+## Retensi Data & Privasi (FR-07 / UU PDP)
+
+- Gambar asli dihapus otomatis **setelah 24 jam**; hasil proses setelah **7 hari** (ADR-005).
+- Sweep retensi dijalankan **Celery Beat** (service `beat`):
+  `docker compose up -d beat worker` (interval default 60 menit, env `RETENTION_PURGE_INTERVAL_MINUTES`).
+- Consent privasi wajib saat daftar (checkbox + halaman `/privacy`); user Google OAuth mengonfirmasi lewat banner di dashboard.
+
+## Reliabilitas Job (NFR-03)
+
+- **Retry otomatis**: job gagal dicoba ulang maksimal 2× (backoff eksponensial) di worker Celery; kuota hanya dipotong pada percobaan terakhir.
+- **Stale-check**: job yang tersangkut di status `processing` > 30 menit (env `JOB_STALE_MINUTES`) otomatis ditandai `failed` + kuota direfund oleh beat (interval `STALE_CHECK_INTERVAL_MINUTES`, default 15) — ini juga membuka jalan retensi FR-07 untuk menghapus original-nya (anti bocor disk).
+
+## Restorasi Wajah (FR-08)
+
+- Opsi **GFPGAN** per upload (switch di dashboard) dikirim sebagai `face_enhance` ke `POST /api/v1/jobs`.
+- Backend real memakai **`GFPGANer` terpisah** dengan `bg_upsampler` (RealESRGANer v0.3.0 **tidak** punya param `face_enhance` di `enhance()`); konversi RGB↔BGR + upscale kanal alpha ditangani pipeline.
+- Mock backend mengabaikan flag dengan log warning (dev lokal).
+- Weight `GFPGANv1.4.pth` + deteksi wajah retinaface diunduh otomatis oleh `python api/scripts/download_models.py` dan ter-bake di `Dockerfile.worker`.
+
+## Denoise & Pertegas Warna (FR-09)
+
+- Toggle **Denoise** & **Pertegas warna** per upload (dikirim sebagai `denoise` / `color_enhance` ke `POST /api/v1/jobs`).
+- Denoise memakai model `realesr-general-x4v3` + `realesr-general-wdn-x4v3` (DNI interpolasi, flag `-dn` Real-ESRGAN) — kekuatan diatur `DENOISE_STRENGTH`.
+- Pertegas warna = pra-pemrosesan Pillow (saturasi/kontras/brightness, `COLOR_ENHANCE_STRENGTH`); backend mock menerapkan efek ringan yang setara.
+- Kedua weight `general` diunduh otomatis oleh `python api/scripts/download_models.py` dan ter-bake di `Dockerfile.worker`.
+
+## Riwayat Proses (FR-10)
+
+- Endpoint `GET /api/v1/jobs` (list riwayat user, pagination `limit`/`offset`, urut terbaru) — hanya job milik user.
+- Halaman `/history` di web (link dari dashboard): badge status, info proses, **unduh ulang** selama hasil masih tersimpan (7 hari free). Tombol dinonaktifkan otomatis saat hasil sudah dihapus retensi.
+
+> ⚠️ **Kolom DB baru (FR-07/08/09):** fitur-fitur ini menambah kolom
+> `original_deleted_at` / `result_deleted_at` / `face_enhance` / `denoise` /
+> `color_enhance` (jobs) dan `privacy_consent_at` (users). Karena belum
+> ada Alembic, volume Postgres lama perlu `docker compose down -v` (atau
+> ALTER TABLE manual) sebelum `docker compose up --build`.
+
 ## Quickstart (Docker)
 
 ```bash

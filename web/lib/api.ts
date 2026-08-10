@@ -51,10 +51,16 @@ export async function registerUser(input: {
   email: string;
   password: string;
   name: string;
+  privacyConsent: boolean;
 }): Promise<User> {
   return apiFetch<User>("/api/v1/auth/register", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      email: input.email,
+      password: input.password,
+      name: input.name,
+      privacy_consent: input.privacyConsent,
+    }),
   });
 }
 
@@ -70,6 +76,13 @@ export async function loginUser(input: {
 
 export async function logoutUser(): Promise<void> {
   await apiFetch<{ status: string }>("/api/v1/auth/logout", {
+    method: "POST",
+  });
+}
+
+// FR-07 (UU PDP): catat persetujuan kebijakan privasi.
+export async function grantPrivacyConsent(): Promise<User> {
+  return apiFetch<User>("/api/v1/auth/consent", {
     method: "POST",
   });
 }
@@ -100,21 +113,36 @@ export interface Job {
   status: JobStatus;
   scale: number;
   output_format: "webp" | "jpeg" | "png";
+  face_enhance: boolean;
+  denoise: boolean;
+  color_enhance: boolean;
   original_name: string;
   error: string | null;
   created_at: string;
   finished_at: string | null;
+  result_deleted_at: string | null;
+}
+
+export interface JobList {
+  items: Job[];
+  total: number;
 }
 
 export async function createJob(input: {
   file: File;
   scale: number;
   outputFormat: Job["output_format"];
+  faceEnhance: boolean;
+  denoise: boolean;
+  colorEnhance: boolean;
 }): Promise<Job> {
   const form = new FormData();
   form.append("file", input.file);
   form.append("scale", String(input.scale));
   form.append("output_format", input.outputFormat);
+  form.append("face_enhance", String(input.faceEnhance));
+  form.append("denoise", String(input.denoise));
+  form.append("color_enhance", String(input.colorEnhance));
 
   const res = await fetch(`${API_URL}/api/v1/jobs`, {
     method: "POST",
@@ -139,6 +167,12 @@ export async function getJob(jobId: string): Promise<Job> {
   return apiFetch<Job>(`/api/v1/jobs/${jobId}`);
 }
 
+export async function listJobs(limit = 20, offset = 0): Promise<JobList> {
+  return apiFetch<JobList>(
+    `/api/v1/jobs?limit=${limit}&offset=${offset}`,
+  );
+}
+
 export async function fetchJobResult(jobId: string): Promise<Blob> {
   const res = await fetch(`${API_URL}/api/v1/jobs/${jobId}/download`, {
     credentials: "include",
@@ -149,6 +183,3 @@ export async function fetchJobResult(jobId: string): Promise<Blob> {
   return res.blob();
 }
 
-export function jobDownloadUrl(jobId: string): string {
-  return `${API_URL}/api/v1/jobs/${jobId}/download`;
-}

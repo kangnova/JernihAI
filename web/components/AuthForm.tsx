@@ -17,6 +17,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [privacyConsent, setPrivacyConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -25,6 +26,10 @@ export function AuthForm({ mode }: AuthFormProps) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!isLogin && !privacyConsent) {
+      setError("Kamu perlu menyetujui kebijakan privasi untuk mendaftar.");
+      return;
+    }
     setLoading(true);
     try {
       if (isLogin) {
@@ -103,10 +108,32 @@ export function AuthForm({ mode }: AuthFormProps) {
             placeholder={isLogin ? "Password kamu" : "Minimal 8 karakter"}
           />
         </div>
+        {!isLogin && (
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3 text-xs text-slate-400 transition-colors hover:border-indigo-400/40">
+            <input
+              type="checkbox"
+              checked={privacyConsent}
+              onChange={(e) => setPrivacyConsent(e.target.checked)}
+              className="mt-0.5 size-4 shrink-0 accent-indigo-500"
+            />
+            <span>
+              Saya menyetujui{" "}
+              <Link
+                href="/privacy"
+                target="_blank"
+                className="text-indigo-300 hover:underline"
+              >
+                Kebijakan Privasi
+              </Link>
+              : gambar asli dihapus otomatis setelah 24 jam dan hasil setelah
+              7 hari (UU PDP).
+            </span>
+          </label>
+        )}
         <button
           type="submit"
-          disabled={loading}
-          className="w-full rounded-lg bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          disabled={loading || (!isLogin && !privacyConsent)}
+          className="w-full rounded-lg bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
         >
           {loading ? "Tunggu…" : isLogin ? "Masuk" : "Daftar"}
         </button>

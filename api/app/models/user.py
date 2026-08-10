@@ -35,6 +35,10 @@ class User(Base):
     # reset, format "YYYY-MM-DD" (sentinel 1970-01-01 = belum pernah).
     free_daily_quota_used: Mapped[int] = mapped_column(Integer, default=0)
     free_quota_date: Mapped[str] = mapped_column(String(10), default="1970-01-01")
+    # FR-07 (UU PDP): timestamp persetujuan kebijakan privasi (kapan user
+    # menyetujui; None = belum menyetujui). Consent wajib saat register
+    # lokal; user Google OAuth diminta lewat banner di dashboard.
+    privacy_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

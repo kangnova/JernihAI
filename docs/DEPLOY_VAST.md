@@ -162,7 +162,9 @@ bisa diuji end-to-end dari browser tanpa VPS terpisah. Biaya lebih tinggi
      --profile gpu up -d --build
    ```
    Override `infra/vast/compose.vast.yml` memberi `worker-gpu` bind mount
-   `./api:/app` supaya berbagi storage (uploads/results) dengan `api`.
+   `./api:/app` supaya berbagi storage (uploads/results) dengan `api` —
+   override yang sama juga menambahkan service `beat` (Celery Beat)
+   sehingga sweep retensi FR-07 ikut berjalan.
 3. Populasi weights (bind mount men-shadow weights yang di-bake):
    ```bash
    docker compose -f docker-compose.yml -f infra/vast/compose.vast.yml \
@@ -177,6 +179,14 @@ bisa diuji end-to-end dari browser tanpa VPS terpisah. Biaya lebih tinggi
 5. E2E: register → upload `samples/noisy_256.png` → polling → download →
    verifikasi hasil (bandingkan dengan versi mock: detail model vs halus).
 6. Destroy instance.
+
+> ⚠️ **FR-07 & kolom DB baru:** fitur retensi & consent menambah kolom
+> (`original_deleted_at`, `result_deleted_at` di tabel `jobs`;
+> `privacy_consent_at` di tabel `users`). Proyek belum memakai Alembic —
+> `create_all` hanya membuat tabel BARU. Bila volume Postgres `pgdata`
+> sudah ada dari versi lama, jalankan sekali:
+> `docker compose down -v` (hapus data dev) atau ALTER TABLE manual, agar
+> service yang memakai kolom baru tidak error di runtime.
 
 > **Gap produksi yang diketahui:** `worker-gpu` dan `api` membutuhkan
 > storage bersama (bind mount di Opsi B; di produksi multi-node pakai

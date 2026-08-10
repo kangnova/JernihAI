@@ -1,11 +1,12 @@
-"""Endpoint jobs — FR-02 upload, FR-03 status (polling), FR-05 download (Fase 1)."""
+"""Endpoint jobs — FR-02 upload, FR-03 status (polling), FR-05 download,
+FR-10 riwayat (list)."""
 
 import logging
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -15,7 +16,7 @@ from app.core.storage import detect_image_format, resolve, save_upload
 from app.db.session import get_db
 from app.models.job import Job, JobStatus
 from app.models.user import User
-from app.schemas.job import JobOut
+from app.schemas.job import JobListOut, JobOut
 from app.tasks.enhance import process_enhancement, process_job
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,9 @@ async def create_job(
     file: UploadFile = File(...),
     scale: int = Form(2),
     output_format: str = Form("webp"),
+    face_enhance: bool = Form(False),
+    denoise: bool = Form(False),
+    color_enhance: bool = Form(False),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Job:
@@ -86,6 +90,9 @@ async def create_job(
         user_id=current_user.id,
         scale=scale,
         output_format=output_format,
+        face_enhance=face_enhance,
+        denoise=denoise,
+        color_enhance=color_enhance,
         original_name=file.filename or "gambar",
         original_path=original_path,
     )
@@ -132,6 +139,37 @@ async def _get_owned_job(
 
 
 @router.get(
+    "",
+    response_model=JobListOut,
+    summary="Riwayat job user (FR-10)",
+)
+async def list_jobs(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> JobListOut:
+    """Daftar job milik user, terbaru dulu (FR-10).
+
+    Hanya job milik user yang login — tidak membocorkan job orang lain.
+    Pagination `limit`/`offset`; `result_deleted_at` memberitahu UI bahwa
+    hasil sudah dihapus retensi (tombol unduh ulang dinonaktifkan).
+    """
+    where = Job.user_id == current_user.id
+    total = await db.scalar(select(func.count()).select_from(Job).where(where))
+    # Sort stabil: created_at DESC + id DESC sebagai tiebreaker agar
+    # pagination deterministik (tidak ada lompat/duplikat saat timestamp sama).
+    result = await db.execute(
+        select(Job)
+        .where(where)
+        .order_by(Job.created_at.desc(), Job.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    return JobListOut(items=list(result.scalars()), total=total or 0)
+
+
+@router.get(
     "/{job_id}",
     response_model=JobOut,
     summary="Cek status job (polling — FR-03)",
@@ -154,6 +192,12 @@ async def download_result(
     current_user: User = Depends(get_current_user),
 ) -> FileResponse:
     job = await _get_owned_job(db, job_id, current_user)
+    if job.result_deleted_at is not None:
+        # FR-07: hasil sudah dihapus oleh retensi (7 hari) — jawab 410 Gone.
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Hasil sudah dihapus oleh retensi otomatis (disimpan 7 hari).",
+        )
     if job.status != JobStatus.COMPLETED.value or not job.result_path:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

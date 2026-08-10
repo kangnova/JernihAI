@@ -31,6 +31,11 @@ dist/
 # --- uploads & hasil (privasi — FR-07, jangan pernah commit gambar user) ---
 api/storage/
 
+# --- model weights runtime (FR-08/FR-09) — diunduh download_models.py,
+#     ter-bake di image worker saat build; jangan commit file .pth ---
+api/gfpgan/
+api/facexlib/
+
 # --- misc ---
 .DS_Store
 *.log

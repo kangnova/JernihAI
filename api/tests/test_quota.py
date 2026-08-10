@@ -61,7 +61,12 @@ async def client(db):
 async def _register(client, email: str = "user@example.com") -> None:
     resp = await client.post(
         "/api/v1/auth/register",
-        json={"email": email, "password": "password123", "name": "Tono"},
+        json={
+            "email": email,
+            "password": "password123",
+            "name": "Tono",
+            "privacy_consent": True,
+        },
     )
     assert resp.status_code == 201
 

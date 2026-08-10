@@ -5,6 +5,7 @@ Pipeline dijalankan inline (mode eager) sehingga end-to-end
 """
 
 import io
+import sys
 from pathlib import Path
 
 import pytest
@@ -63,7 +64,12 @@ async def client(db):
 async def _register(client, email: str = "user@example.com") -> str:
     resp = await client.post(
         "/api/v1/auth/register",
-        json={"email": email, "password": "password123", "name": "Tono"},
+        json={
+            "email": email,
+            "password": "password123",
+            "name": "Tono",
+            "privacy_consent": True,
+        },
     )
     assert resp.status_code == 201
     return resp.json()["id"]
@@ -115,6 +121,55 @@ async def test_upload_respects_scale_and_format(client):
     assert data["output_format"] == "jpeg"
 
 
+async def test_upload_face_enhance_default_off(client):
+    """FR-08: face_enhance default False di respons JobOut."""
+    await _register(client)
+    data = await _upload(client, "png")
+    assert data["face_enhance"] is False
+
+
+async def test_upload_face_enhance_on(client):
+    """FR-08: face_enhance=True diterima & dipertahankan (mock tetap sukses)."""
+    await _register(client)
+    resp = await client.post(
+        "/api/v1/jobs",
+        files={"file": ("foto.png", _image_bytes("png"), "image/png")},
+        data={"scale": "2", "output_format": "webp", "face_enhance": "true"},
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["status"] == JobStatus.COMPLETED.value
+    assert data["face_enhance"] is True
+
+
+async def test_upload_denoise_color_default_off(client):
+    """FR-09: denoise & color_enhance default False di respons JobOut."""
+    await _register(client)
+    data = await _upload(client, "png")
+    assert data["denoise"] is False
+    assert data["color_enhance"] is False
+
+
+async def test_upload_denoise_color_on(client):
+    """FR-09: toggle denoise & color_enhance diterima (mock tetap sukses)."""
+    await _register(client)
+    resp = await client.post(
+        "/api/v1/jobs",
+        files={"file": ("foto.png", _image_bytes("png"), "image/png")},
+        data={
+            "scale": "2",
+            "output_format": "webp",
+            "denoise": "true",
+            "color_enhance": "true",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["status"] == JobStatus.COMPLETED.value
+    assert data["denoise"] is True
+    assert data["color_enhance"] is True
+
+
 async def test_upload_rejects_non_image_content(client):
     await _register(client)
     resp = await client.post(
@@ -154,6 +209,76 @@ async def test_upload_rejects_invalid_output_format(client):
         data={"scale": "2", "output_format": "gif"},
     )
     assert resp.status_code == 400
+
+
+async def test_list_jobs_requires_auth(client):
+    resp = await client.get("/api/v1/jobs")
+    assert resp.status_code == 401
+
+
+async def test_list_jobs_empty(client):
+    await _register(client)
+    resp = await client.get("/api/v1/jobs")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"items": [], "total": 0}
+
+
+async def test_list_jobs_returns_own_jobs_newest_first(client):
+    """FR-10: hanya job milik user + urutan terbaru dulu."""
+    await _register(client)
+    for _ in range(3):
+        await _upload(client, "png")
+    resp = await client.get("/api/v1/jobs")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 3
+    items = body["items"]
+    assert len(items) == 3
+    # Terbaru dulu (created_at descending).
+    created = [i["created_at"] for i in items]
+    assert created == sorted(created, reverse=True)
+    # Item memuat field yang dibutuhkan UI riwayat.
+    assert all(i["original_name"] == "foto.png" for i in items)
+    assert all(i["face_enhance"] is False for i in items)
+    assert all(i["result_deleted_at"] is None for i in items)
+    assert all("user_id" not in i for i in items)
+
+
+async def test_list_jobs_does_not_leak_other_users_jobs(client):
+    """FR-10: job user lain tidak bocor ke riwayat user ini."""
+    await _register(client, "owner@example.com")
+    await _upload(client, "png")
+    await _register(client, "other@example.com")  # cookie berganti user
+    resp = await client.get("/api/v1/jobs")
+    assert resp.status_code == 200
+    assert resp.json() == {"items": [], "total": 0}
+
+
+async def test_list_jobs_pagination(client, monkeypatch):
+    """FR-10: limit/offset bekerja (halaman 1 vs 2)."""
+    # FR-06 default 3/hari — naikkan agar 5 upload diterima.
+    monkeypatch.setattr(settings, "free_daily_quota", 10)
+    await _register(client)
+    for _ in range(5):
+        await _upload(client, "png")
+    page1 = (await client.get("/api/v1/jobs?limit=2&offset=0")).json()
+    page2 = (await client.get("/api/v1/jobs?limit=2&offset=2")).json()
+    assert page1["total"] == 5
+    assert len(page1["items"]) == 2
+    assert len(page2["items"]) == 2
+    # Tidak ada duplikat antar halaman.
+    ids1 = {i["id"] for i in page1["items"]}
+    ids2 = {i["id"] for i in page2["items"]}
+    assert ids1.isdisjoint(ids2)
+
+
+async def test_list_jobs_rejects_invalid_pagination(client):
+    await _register(client)
+    resp = await client.get("/api/v1/jobs?limit=0")
+    assert resp.status_code == 422
+    resp = await client.get("/api/v1/jobs?limit=1000")
+    assert resp.status_code == 422
 
 
 async def test_get_job_status_ok(client):
@@ -292,7 +417,7 @@ def test_effective_outscale_unaffected_within_limit(monkeypatch, tmp_path):
 async def test_backend_real_fails_loudly_when_model_missing(client, db, monkeypatch):
     """backend=real tanpa model -> job FAILED (bukan mock senyap)."""
     monkeypatch.setattr(settings, "enhance_backend", "real")
-    monkeypatch.setattr(enhance_module, "_get_upsampler", lambda: None)
+    monkeypatch.setattr(enhance_module, "_get_upsampler", lambda denoise=False: None)
     monkeypatch.setattr(
         enhance_module, "_upsampler_error", "simulasi: torch/torch tidak tersedia"
     )
@@ -325,7 +450,7 @@ async def test_backend_real_fails_loudly_when_model_missing(client, db, monkeypa
 async def test_backend_auto_falls_back_to_mock(client, db, monkeypatch):
     """backend=auto tanpa model -> job sukses via mock (prd.md §12)."""
     monkeypatch.setattr(settings, "enhance_backend", "auto")
-    monkeypatch.setattr(enhance_module, "_get_upsampler", lambda: None)
+    monkeypatch.setattr(enhance_module, "_get_upsampler", lambda denoise=False: None)
 
     await _register(client)
     data = await _upload(client, "png")
@@ -341,6 +466,193 @@ async def test_backend_unknown_value_fails_loudly(client, db, monkeypatch):
     data = await _upload(client, "png")
     assert data["status"] == JobStatus.FAILED.value
     assert "enhance_backend" in (data["error"] or "")
+
+
+class _FakeNumpyArray(bytes):
+    """Tiruan array numpy HWC uint8 — venv dev tidak punya numpy (extra `gpu`).
+
+    Subclass `bytes` karena Pillow modern butuh objek bytes-like untuk
+    `Image.fromarray` (bukan sekadar `__array_interface__`). Mendukung
+    pola yang dipakai pipeline real: `asarray(img)[:, :, ::-1]` (tukar
+    kanal RGB<->BGR) dan `.copy()`.
+    """
+
+    def __new__(cls, data: bytes, shape: tuple[int, int, int]):
+        obj = super().__new__(cls, data)
+        obj.shape = shape
+        return obj
+
+    def __getitem__(self, key):
+        # Dukungan minimal `arr[:, :, ::-1]`: balik urutan kanal tiap pixel.
+        if (
+            isinstance(key, tuple)
+            and len(key) == 3
+            and key[0] == slice(None)
+            and key[1] == slice(None)
+            and key[2] == slice(None, None, -1)
+        ):
+            c = self.shape[2]
+            data = bytearray(self)
+            for i in range(0, len(data), c):
+                data[i : i + c] = data[i : i + c][::-1]
+            return _FakeNumpyArray(bytes(data), self.shape)
+        return super().__getitem__(key)
+
+    def copy(self):
+        return self
+
+    @property
+    def __array_interface__(self):
+        return {
+            "shape": self.shape,
+            "typestr": "|u1",
+            "data": bytes(self),
+            "version": 3,
+        }
+
+
+class _FakeNumpy:
+    """Tiruan numpy minimal: np.asarray(Pillow) -> _FakeNumpyArray."""
+
+    @staticmethod
+    def asarray(img):
+        w, h = img.size
+        return _FakeNumpyArray(img.convert("RGB").tobytes(), (h, w, 3))
+
+
+async def test_real_backend_face_enhance_uses_gfpganer(client, db, monkeypatch):
+    """FR-08 (perbaikan v0.3.0): face_enhance memakai GFPGANer terpisah.
+
+    realesrgan 0.3.0 TIDAK punya param `face_enhance` di
+    `RealESRGANer.enhance()` — restorasi wajah via `GFPGANer` dengan
+    `bg_upsampler` (pola inference_realesrgan.py v0.3.0).
+    """
+    gfpgan_calls: list[dict] = []
+    upsampler_enhance_calls: list = []
+    requested_modes: list[bool] = []
+
+    class _FakeFaceEnhancer:
+        def enhance(self, img, has_aligned=False, only_center_face=False, paste_back=True):
+            gfpgan_calls.append(
+                {
+                    "has_aligned": has_aligned,
+                    "only_center_face": only_center_face,
+                    "paste_back": paste_back,
+                }
+            )
+            return None, None, img
+
+    class _FakeUpsampler:
+        device = "cpu"
+
+        def enhance(self, img, outscale=None):
+            upsampler_enhance_calls.append(outscale)
+            return img, None
+
+    def fake_get_upsampler(denoise: bool = False):
+        requested_modes.append(denoise)
+        return _FakeUpsampler()
+
+    monkeypatch.setitem(sys.modules, "numpy", _FakeNumpy())
+    monkeypatch.setattr(settings, "enhance_backend", "real")
+    monkeypatch.setattr(enhance_module, "_get_upsampler", fake_get_upsampler)
+    monkeypatch.setattr(
+        enhance_module,
+        "_get_face_enhancer",
+        lambda upsampler, outscale: _FakeFaceEnhancer(),
+    )
+    monkeypatch.setattr(enhance_module, "_upsampler_error", None)
+
+    user_id = await _register(client)
+    src = Path(settings.upload_dir) / "wajah.png"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (32, 32), (120, 80, 40)).save(src)
+
+    async with db() as session:
+        session.add(
+            Job(
+                id="face-gfpgan",
+                user_id=user_id,
+                status=JobStatus.QUEUED.value,
+                scale=2,
+                output_format="webp",
+                face_enhance=True,
+                original_name="wajah.png",
+                original_path=str(src),
+            )
+        )
+        await session.commit()
+
+    status = await enhance_module.process_job("face-gfpgan")
+
+    assert status == JobStatus.COMPLETED.value
+    # Up-sampling wajah via GFPGANer, bukan upsampler.enhance.
+    assert len(gfpgan_calls) == 1
+    assert gfpgan_calls[0] == {
+        "has_aligned": False,
+        "only_center_face": False,
+        "paste_back": True,
+    }
+    assert upsampler_enhance_calls == []
+    assert requested_modes == [False]  # mode default x4plus (bukan denoise)
+
+
+async def test_real_backend_denoise_and_color_flags(client, db, monkeypatch):
+    """FR-09: denoise -> mode general (DNI); color_enhance -> pra-pemrosesan
+    warna (bytes BGR yang masuk RealESRGANer ≠ input asli)."""
+    captured: dict = {}
+    requested_modes: list[bool] = []
+
+    class _FakeUpsampler:
+        device = "cpu"
+
+        def enhance(self, img, outscale=None):
+            captured["outscale"] = outscale
+            captured["bgr_bytes"] = bytes(img)  # data BGR yang masuk model
+            return img, None
+
+    def fake_get_upsampler(denoise: bool = False):
+        requested_modes.append(denoise)
+        return _FakeUpsampler()
+
+    monkeypatch.setitem(sys.modules, "numpy", _FakeNumpy())
+    monkeypatch.setattr(settings, "enhance_backend", "real")
+    monkeypatch.setattr(enhance_module, "_get_upsampler", fake_get_upsampler)
+    monkeypatch.setattr(enhance_module, "_upsampler_error", None)
+
+    user_id = await _register(client)
+    src = Path(settings.upload_dir) / "noisy.png"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (32, 32), (200, 100, 50)).save(src)
+
+    async with db() as session:
+        session.add(
+            Job(
+                id="denoise-color",
+                user_id=user_id,
+                status=JobStatus.QUEUED.value,
+                scale=2,
+                output_format="webp",
+                denoise=True,
+                color_enhance=True,
+                original_name="noisy.png",
+                original_path=str(src),
+            )
+        )
+        await session.commit()
+
+    status = await enhance_module.process_job("denoise-color")
+
+    assert status == JobStatus.COMPLETED.value
+    assert requested_modes == [True]  # mode general (DNI) untuk denoise
+    assert captured["outscale"] == 2
+    # color enhance mengubah pixel sebelum konversi BGR. Bandingkan dengan
+    # baseline TANPA color enhance (input asli (200,100,50) yang kanalnya
+    # sudah dibalik ke BGR) — harus berbeda setelah pra-pemrosesan.
+    raw = bytearray(Image.new("RGB", (32, 32), (200, 100, 50)).tobytes())
+    for i in range(0, len(raw), 3):
+        raw[i : i + 3] = raw[i : i + 3][::-1]
+    assert captured["bgr_bytes"] != bytes(raw)
 
 
 def test_encode_and_save_rgba_to_jpeg_converts_rgb(monkeypatch, tmp_path):

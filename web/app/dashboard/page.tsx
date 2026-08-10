@@ -3,11 +3,14 @@
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
+import Link from "next/link";
+
+import { ConsentBanner } from "@/components/ConsentBanner";
 import { JobUploader } from "@/components/JobUploader";
 import { useAuth } from "@/lib/auth";
 
 export default function DashboardPage() {
-  const { status, user, logout } = useAuth();
+  const { status, user, logout, grantConsent } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
@@ -31,15 +34,23 @@ export default function DashboardPage() {
           </span>
           JernihAI
         </div>
-        <button
-          onClick={async () => {
-            await logout();
-            router.push("/");
-          }}
-          className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-slate-300 transition-colors hover:bg-white/10"
-        >
-          Keluar
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/history"
+            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-slate-300 transition-colors hover:bg-white/10"
+          >
+            Riwayat
+          </Link>
+          <button
+            onClick={async () => {
+              await logout();
+              router.push("/");
+            }}
+            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-slate-300 transition-colors hover:bg-white/10"
+          >
+            Keluar
+          </button>
+        </div>
       </nav>
 
       <section className="mx-auto max-w-5xl px-6 pt-10">
@@ -50,6 +61,11 @@ export default function DashboardPage() {
             hari.
           </p>
         </div>
+
+        {/* FR-07: user Google OAuth yang belum menegaskan consent privasi */}
+        {user.privacy_consent_at === null && (
+          <ConsentBanner onAccept={grantConsent} />
+        )}
 
         <JobUploader />
       </section>

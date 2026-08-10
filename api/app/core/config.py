@@ -51,12 +51,45 @@ class Settings(BaseSettings):
     # Jumlah gambar gratis per user per hari (reset otomatis 00:00 WIB).
     free_daily_quota: int = 3
 
+    # --- Retensi data (FR-07 / UU PDP) ---
+    # Original dihapus otomatis setelah N jam; hasil proses setelah N hari.
+    retention_original_hours: int = 24
+    retention_result_days: int = 7
+    # Interval sweep retensi (Celery Beat) dalam menit.
+    retention_purge_interval_minutes: int = 60
+
+    # --- Reliabilitas job (NFR-03) ---
+    # Job yang tersangkut di status `processing` lebih dari batas ini (menit)
+    # dianggap hang (worker mati/crash di tengah pipeline) -> di-stale-check
+    # menjadi `failed` + kuota direfund (lihat app/tasks/stale.py).
+    job_stale_minutes: int = 30
+    # Interval sweep stale-check (Celery Beat) dalam menit.
+    stale_check_interval_minutes: int = 15
+    # Celery: jumlah percobaan ulang untuk job gagal (retry count = max_retries,
+    # total eksekusi = max_retries + 1).
+    job_max_retries: int = 2
+
     # --- Enhance pipeline (Fase 2 — ADR-002: PyTorch + Real-ESRGAN) ---
     # Pilihan backend: "auto" (real bila model tersedia, fallback mock),
     # "real" (wajib model — gagal keras bila tidak tersedia), "mock".
     enhance_backend: str = "auto"
     model_dir: str = "storage/models"
     realesrgan_model: str = "RealESRGAN_x4plus.pth"
+    # FR-09: model general untuk denoise (SRVGGNetCompact + DNI interpolasi
+    # dengan versi wdn = with-denoise; lihat realesrgan 0.3.0 inference script).
+    realesrgan_general_model: str = "realesr-general-x4v3.pth"
+    realesrgan_general_wdn_model: str = "realesr-general-wdn-x4v3.pth"
+    # Kekuatan denoise (DNI): `dni_weight=[strength, 1-strength]` dibobotkan
+    # ke [model NORMAL (x4v3), model wdn] — bobot wdn makin besar = denoise
+    # makin kuat. CATATAN quirk upstream (Real-ESRGAN v0.3.0): dengan urutan
+    # ini, strength 0 = murni wdn (denoise TERKUAT), 1 = murni normal
+    # (terlemah) — kebalikan dari help text resmi `-dn` (kode kita meniru
+    # inference_realesrgan.py persis). Default 0.5 = campuran seimbang.
+    denoise_strength: float = 0.5
+    # Kekuatan color enhance (saturasi, kontras, brightness), 1.0 = netral.
+    color_enhance_strength: float = 1.2
+    # FR-08: weight GFPGAN (face enhance) di model_dir.
+    gfpgan_model: str = "GFPGANv1.4.pth"
     # "auto" -> cuda bila tersedia, selain itu cpu.
     model_device: str = "auto"
     # Tiling mencegah OOM di GPU (prd.md §10: tile 400-512, tile_pad 10-32).

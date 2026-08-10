@@ -2,13 +2,14 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
-import { getMe, loginUser, logoutUser, registerUser } from "@/lib/api";
+import { getMe, grantPrivacyConsent, loginUser, logoutUser, registerUser } from "@/lib/api";
 
 export interface User {
   id: string;
   email: string;
   name: string | null;
   provider: string;
+  privacy_consent_at: string | null;
   created_at: string;
 }
 
@@ -19,6 +20,7 @@ interface AuthContextValue {
   user: User | null;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
+  grantConsent: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -48,12 +50,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const register = useCallback(
     async (name: string, email: string, password: string) => {
-      const u = await registerUser({ name, email, password });
+      const u = await registerUser({
+        name,
+        email,
+        password,
+        privacyConsent: true,
+      });
       setUser(u);
       setStatus("authenticated");
     },
     [],
   );
+
+  // FR-07: user Google OAuth menegaskan consent lewat banner dashboard.
+  const grantConsent = useCallback(async () => {
+    const u = await grantPrivacyConsent();
+    setUser(u);
+  }, []);
 
   const logout = useCallback(async () => {
     try {
@@ -65,7 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ status, user, login, register, logout }}>
+    <AuthContext.Provider value={{ status, user, login, register, grantConsent, logout }}>
       {children}
     </AuthContext.Provider>
   );

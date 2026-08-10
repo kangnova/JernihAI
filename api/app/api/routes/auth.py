@@ -4,6 +4,7 @@ Alur token: JWT ditaruh di httpOnly cookie (ADR-003). Login sukses
 mengatur cookie di response; logout menghapusnya.
 """
 
+from datetime import UTC, datetime
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -47,6 +48,15 @@ async def _get_user_by_email(db: AsyncSession, email: str) -> User | None:
 async def register(
     body: RegisterRequest, response: Response, db: AsyncSession = Depends(get_db)
 ) -> User:
+    # FR-07 (UU PDP): consent eksplisit wajib — tolak bila tidak disetujui.
+    if not body.privacy_consent:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "Kamu harus menyetujui kebijakan privasi untuk mendaftar "
+                "(gambar asli dihapus otomatis setelah 24 jam, hasil setelah 7 hari)"
+            ),
+        )
     if await _get_user_by_email(db, body.email):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -59,6 +69,7 @@ async def register(
         name=body.name.strip(),
         password_hash=hash_password(body.password),
         provider=AuthProvider.LOCAL.value,
+        privacy_consent_at=datetime.now(UTC),
     )
     db.add(user)
     await db.commit()
@@ -100,6 +111,25 @@ async def logout(response: Response) -> dict[str, str]:
 
 @router.get("/auth/me", response_model=UserOut, summary="Profil user yang login")
 async def me(current_user: User = Depends(get_current_user)) -> User:
+    return current_user
+
+
+@router.post(
+    "/auth/consent",
+    response_model=UserOut,
+    summary="Setujui kebijakan privasi (FR-07)",
+)
+async def grant_privacy_consent(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Catat persetujuan privasi — dipakai user Google OAuth yang daftar
+    tanpa form (consent diminta lewat banner di dashboard). Idempoten.
+    """
+    if current_user.privacy_consent_at is None:
+        current_user.privacy_consent_at = datetime.now(UTC)
+        await db.commit()
+        await db.refresh(current_user)
     return current_user
 @router.get(
     "/auth/google",

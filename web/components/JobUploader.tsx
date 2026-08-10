@@ -17,6 +17,55 @@ const STATUS_LABEL: Record<JobStatus, string> = {
   failed: "Gagal",
 };
 
+function ToggleCard({
+  title,
+  activeLabel,
+  description,
+  checked,
+  onChange,
+  activeClass,
+  knobClass,
+}: {
+  title: string;
+  activeLabel: string;
+  description: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  activeClass: string;
+  knobClass: string;
+}) {
+  return (
+    <div>
+      <p className="mb-2 text-sm font-medium text-slate-300">{title}</p>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`flex w-full items-center justify-between rounded-lg border px-4 py-2 text-sm transition-colors ${
+          checked
+            ? activeClass
+            : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+        }`}
+      >
+        <span>{checked ? activeLabel : "Nonaktif"}</span>
+        <span
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+            checked ? knobClass : "bg-white/15"
+          }`}
+        >
+          <span
+            className={`inline-block size-4 transform rounded-full bg-white transition-transform ${
+              checked ? "translate-x-4" : "translate-x-0.5"
+            }`}
+          />
+        </span>
+      </button>
+      <p className="mt-1.5 text-xs text-slate-500">{description}</p>
+    </div>
+  );
+}
+
 export function JobUploader() {
   const [file, setFile] = useState<File | null>(null);
   const [beforeUrl, setBeforeUrl] = useState<string | null>(null);
@@ -24,6 +73,9 @@ export function JobUploader() {
   const [outputFormat, setOutputFormat] = useState<"webp" | "jpeg" | "png">(
     "webp",
   );
+  const [faceEnhance, setFaceEnhance] = useState(false);
+  const [denoise, setDenoise] = useState(false);
+  const [colorEnhance, setColorEnhance] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
@@ -114,6 +166,9 @@ export function JobUploader() {
         file,
         scale,
         outputFormat,
+        faceEnhance,
+        denoise,
+        colorEnhance,
       });
       setJob(created);
       // Refresh sisa kuota setelah upload berhasil.
@@ -256,7 +311,7 @@ export function JobUploader() {
       {/* Opsi + tombol (saat belum ada job aktif) */}
       {!job && file && (
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-          <div className="grid gap-5 sm:grid-cols-2">
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <p className="mb-2 text-sm font-medium text-slate-300">Skala</p>
               <div className="flex gap-2">
@@ -297,6 +352,33 @@ export function JobUploader() {
                 ))}
               </div>
             </div>
+            <ToggleCard
+              title="Restorasi wajah"
+              activeLabel="GFPGAN"
+              description="Perjelas wajah pada foto lama / potret"
+              checked={faceEnhance}
+              onChange={setFaceEnhance}
+              activeClass="border-fuchsia-400 bg-fuchsia-500/15 text-fuchsia-200"
+              knobClass="bg-fuchsia-500"
+            />
+            <ToggleCard
+              title="Denoise"
+              activeLabel="Aktif"
+              description="Kurangi noise / grain (realesr-general-x4v3)"
+              checked={denoise}
+              onChange={setDenoise}
+              activeClass="border-sky-400 bg-sky-500/15 text-sky-200"
+              knobClass="bg-sky-500"
+            />
+            <ToggleCard
+              title="Pertegas warna"
+              activeLabel="Aktif"
+              description="Pulihkan warna foto lama yang pudar"
+              checked={colorEnhance}
+              onChange={setColorEnhance}
+              activeClass="border-amber-400 bg-amber-500/15 text-amber-200"
+              knobClass="bg-amber-500"
+            />
           </div>
           <button
             type="button"
@@ -321,7 +403,10 @@ export function JobUploader() {
             {STATUS_LABEL[job.status]}
           </p>
           <p className="mt-1 text-sm text-slate-400">
-            Meningkatkan {job.original_name} ke {job.scale}×…
+            Meningkatkan {job.original_name} ke {job.scale}×
+            {job.face_enhance ? " + restorasi wajah" : ""}
+            {job.denoise ? " + denoise" : ""}
+            {job.color_enhance ? " + pertegas warna" : ""}…
           </p>
         </div>
       )}
@@ -355,7 +440,11 @@ export function JobUploader() {
               onClick={handleDownload}
               className="flex-1 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
             >
-              Unduh hasil ({job.output_format.toUpperCase()} {job.scale}×)
+              Unduh hasil (
+              {job.output_format.toUpperCase()} {job.scale}×
+              {job.face_enhance ? " + wajah" : ""}
+              {job.denoise ? " + denoise" : ""}
+              {job.color_enhance ? " + warna" : ""})
             </button>
             <button
               type="button"

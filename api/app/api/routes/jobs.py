@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.quota import consume_quota, quota_remaining
 from app.core.storage import detect_image_format, resolve, save_upload
 from app.db.session import get_db
 from app.models.job import Job, JobStatus
@@ -50,6 +51,17 @@ async def create_job(
             detail=f"output_format harus salah satu dari {sorted(ALLOWED_FORMATS)}",
         )
 
+    # FR-06: cek kuota gratis SEBELUM membaca file — user yang sudah habis
+    # jatah tidak perlu mengunggah (hemat bandwidth & disk).
+    if quota_remaining(current_user) <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Kuota gratis harian sudah habis ({settings.free_daily_quota} "
+                "gambar/hari). Kuota reset otomatis besok (00:00 WIB)."
+            ),
+        )
+
     data = await file.read()
     if not data:
         raise HTTPException(
@@ -78,6 +90,10 @@ async def create_job(
         original_path=original_path,
     )
     db.add(job)
+    # FR-06: konsumsi 1 kuota saat job diterima (di-refund bila job gagal
+    # di app/tasks/enhance.py). Digabung dalam satu transaksi dengan insert
+    # job — commit di bawah.
+    consume_quota(current_user)
     try:
         await db.commit()
     except Exception:

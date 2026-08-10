@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # True = proses job inline tanpa Redis (dev lokal & test end-to-end).
     celery_task_always_eager: bool = False
 
+    # --- Kuota gratis (FR-06) ---
+    # Jumlah gambar gratis per user per hari (reset otomatis 00:00 WIB).
+    free_daily_quota: int = 3
+
     # --- Enhance pipeline (Fase 2 — ADR-002: PyTorch + Real-ESRGAN) ---
     # Pilihan backend: "auto" (real bila model tersedia, fallback mock),
     # "real" (wajib model — gagal keras bila tidak tersedia), "mock".

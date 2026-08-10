@@ -78,6 +78,19 @@ export function googleLoginUrl(): string {
   return `${API_URL}/api/v1/auth/google`;
 }
 
+// --- Kuota gratis (FR-06) ---
+
+export interface QuotaInfo {
+  limit: number;
+  used: number;
+  remaining: number;
+  reset_date: string;
+}
+
+export async function getQuota(): Promise<QuotaInfo> {
+  return apiFetch<QuotaInfo>("/api/v1/quota");
+}
+
 // --- Jobs (FR-02/03/05) ---
 
 export type JobStatus = "queued" | "processing" | "completed" | "failed";

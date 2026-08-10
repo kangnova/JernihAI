@@ -23,8 +23,10 @@ from pathlib import Path
 from PIL import Image
 
 from app.core.config import settings
+from app.core.quota import refund_quota
 from app.db.session import async_session_factory
 from app.models.job import Job, JobStatus
+from app.models.user import User
 from app.tasks.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -151,6 +153,11 @@ async def process_job(job_id: str) -> str | None:
         except Exception as exc:
             job.status = JobStatus.FAILED.value
             job.error = str(exc)[:500]
+            # FR-06: job gagal TIDAK menghabiskan kuota — kembalikan 1 jatah
+            # (floor 0), digabung dalam transaksi status failed.
+            user = await session.get(User, job.user_id)
+            if user is not None:
+                refund_quota(user)
         await session.commit()
         return job.status
 

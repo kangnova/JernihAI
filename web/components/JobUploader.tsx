@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { Job, JobStatus } from "@/lib/api";
-import { createJob, fetchJobResult, getJob } from "@/lib/api";
+import type { Job, JobStatus, QuotaInfo } from "@/lib/api";
+import { createJob, fetchJobResult, getJob, getQuota } from "@/lib/api";
 import { BeforeAfterSlider } from "@/components/BeforeAfterSlider";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB (sama dengan FR-02 di API)
@@ -29,7 +29,16 @@ export function JobUploader() {
   const [job, setJob] = useState<Job | null>(null);
   const [afterUrl, setAfterUrl] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Kuota gratis hari ini (FR-06) — dimuat sekali saat mount, di-refresh
+  // setelah upload sukses.
+  useEffect(() => {
+    getQuota()
+      .then(setQuota)
+      .catch(() => setQuota(null));
+  }, []);
 
   // Buat object URL untuk preview asli; bersihkan saat ganti/lepas.
   useEffect(() => {
@@ -52,6 +61,12 @@ export function JobUploader() {
         if (updated.status === "completed") {
           const blob = await fetchJobResult(updated.id);
           setAfterUrl(URL.createObjectURL(blob));
+        }
+        if (updated.status === "failed") {
+          // Job gagal -> kuota di-refund server; refresh badge biar akurat.
+          getQuota()
+            .then(setQuota)
+            .catch(() => {});
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Gagal memeriksa status");
@@ -86,6 +101,10 @@ export function JobUploader() {
 
   async function handleUpload() {
     if (!file || uploading) return;
+    if (quota?.remaining === 0) {
+      setError("Kuota gratis hari ini sudah habis — reset besok (00:00 WIB).");
+      return;
+    }
     setError(null);
     setUploading(true);
     setJob(null);
@@ -97,6 +116,10 @@ export function JobUploader() {
         outputFormat,
       });
       setJob(created);
+      // Refresh sisa kuota setelah upload berhasil.
+      getQuota()
+        .then(setQuota)
+        .catch(() => {});
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload gagal");
     } finally {
@@ -122,6 +145,42 @@ export function JobUploader() {
 
   return (
     <div className="space-y-6">
+      {/* Kuota gratis (FR-06) */}
+      {quota && (
+        <div
+          className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 ${
+            quota.remaining === 0
+              ? "border-rose-500/30 bg-rose-500/10"
+              : "border-white/10 bg-white/[0.03]"
+          }`}
+        >
+          <div>
+            <p
+              className={`text-sm font-medium ${
+                quota.remaining === 0 ? "text-rose-300" : "text-slate-200"
+              }`}
+            >
+              {quota.remaining === 0
+                ? "Kuota gratis hari ini habis"
+                : `Kuota gratis tersisa: ${quota.remaining} dari ${quota.limit} gambar`}
+            </p>
+            <p className="text-xs text-slate-400">Reset otomatis 00:00 WIB</p>
+          </div>
+          <div className="h-1.5 w-28 shrink-0 overflow-hidden rounded-full bg-white/10">
+            <div
+              className={`h-full rounded-full transition-all ${
+                quota.remaining === 0
+                  ? "bg-rose-500"
+                  : quota.remaining === 1
+                    ? "bg-amber-400"
+                    : "bg-emerald-400"
+              }`}
+              style={{ width: `${Math.min(100, (quota.remaining / quota.limit) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Dropzone */}
       <div
         onDragOver={(e) => {
@@ -242,10 +301,14 @@ export function JobUploader() {
           <button
             type="button"
             onClick={handleUpload}
-            disabled={uploading}
+            disabled={uploading || quota?.remaining === 0}
             className="mt-5 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
           >
-            {uploading ? "Mengunggah…" : "Tingkatkan gambar"}
+            {uploading
+              ? "Mengunggah…"
+              : quota?.remaining === 0
+                ? "Kuota hari ini habis"
+                : "Tingkatkan gambar"}
           </button>
         </div>
       )}

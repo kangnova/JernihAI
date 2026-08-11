@@ -36,7 +36,23 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
-        description="API backend JernihAI — platform peningkatan kualitas gambar.",
+        description=(
+            "API backend JernihAI — platform peningkatan kualitas gambar.\n\n"
+            "Dokumentasi API Publik B2B (FR-14) untuk developer: `docs/API_B2B.md`. "
+            "Spesifikasi OpenAPI lengkap: `docs/api/openapi.yaml` (regenerate via "
+            "`python api/scripts/export_openapi.py`)."
+        ),
+        openapi_tags=[
+            {
+                "name": "b2b",
+                "description": (
+                    "**API Publik B2B (FR-14)** untuk developer. Autentikasi via header "
+                    "`X-API-Key` (buat di halaman web **/api-keys**); 1 job = 1 kredit "
+                    "dari saldo pemilik key (pay-per-call, tanpa saldo -> 402). Rate limit "
+                    "per menit per tier: **free 20 / pro 120** (NFR-04)."
+                ),
+            },
+        ],
         lifespan=lifespan,
     )
 

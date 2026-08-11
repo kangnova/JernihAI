@@ -1,0 +1,2204 @@
+openapi: 3.1.0
+info:
+  title: JernihAI API
+  description: 'API backend JernihAI — platform peningkatan kualitas gambar.
+
+
+    Dokumentasi API Publik B2B (FR-14) untuk developer: `docs/API_B2B.md`. Spesifikasi
+    OpenAPI lengkap: `docs/api/openapi.yaml` (regenerate via `python api/scripts/export_openapi.py`).'
+  version: 0.1.0
+paths:
+  /api/v1/health:
+    get:
+      tags:
+      - health
+      summary: Liveness check
+      operationId: health_api_v1_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/v1/health/ready:
+    get:
+      tags:
+      - health
+      summary: Readiness check
+      operationId: ready_api_v1_health_ready_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/v1/auth/register:
+    post:
+      tags:
+      - auth
+      summary: Daftar akun baru
+      operationId: register_api_v1_auth_register_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/auth/login:
+    post:
+      tags:
+      - auth
+      summary: Login email + password
+      operationId: login_api_v1_auth_login_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/auth/logout:
+    post:
+      tags:
+      - auth
+      summary: Keluar (hapus cookie sesi)
+      operationId: logout_api_v1_auth_logout_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Logout Api V1 Auth Logout Post
+  /api/v1/auth/me:
+    get:
+      tags:
+      - auth
+      summary: Profil user yang login
+      operationId: me_api_v1_auth_me_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+  /api/v1/auth/consent:
+    post:
+      tags:
+      - auth
+      summary: Setujui kebijakan privasi (FR-07)
+      description: 'Catat persetujuan privasi — dipakai user Google OAuth yang daftar
+
+        tanpa form (consent diminta lewat banner di dashboard). Idempoten.'
+      operationId: grant_privacy_consent_api_v1_auth_consent_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+  /api/v1/auth/google:
+    get:
+      tags:
+      - auth
+      summary: Mulai login Google (redirect ke Google)
+      operationId: google_login_api_v1_auth_google_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Google Login Api V1 Auth Google Get
+  /api/v1/auth/google/callback:
+    get:
+      tags:
+      - auth
+      summary: Callback Google — tukar code dengan token lalu set cookie
+      operationId: google_callback_api_v1_auth_google_callback_get
+      parameters:
+      - name: code
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Code
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/billing/packages:
+    get:
+      tags:
+      - billing
+      summary: Paket kredit + saldo (FR-11)
+      operationId: get_packages_api_v1_billing_packages_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackagesOut'
+  /api/v1/billing/checkout:
+    post:
+      tags:
+      - billing
+      summary: Buat order + token Snap (FR-11)
+      operationId: checkout_api_v1_billing_checkout_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/billing/transactions:
+    get:
+      tags:
+      - billing
+      summary: Riwayat transaksi user (FR-11)
+      operationId: list_transactions_api_v1_billing_transactions_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionsOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/billing/webhook:
+    post:
+      tags:
+      - billing
+      summary: Notifikasi pembayaran Midtrans (FR-11)
+      description: 'Terima notifikasi Midtrans, verifikasi signature, cairkan kredit.
+
+
+        Idempoten: order yang sudah `paid` tidak diproses ulang (webhook
+
+        duplikat/tunda tidak menggandakan saldo). Balas selalu 200 untuk
+
+        event yang sah (Midtrans mengulang pengiriman bila bukan 2xx).'
+      operationId: midtrans_webhook_api_v1_billing_webhook_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Midtrans Webhook Api V1 Billing Webhook Post
+  /api/v1/jobs:
+    post:
+      tags:
+      - jobs
+      summary: Upload gambar & mulai proses (FR-02/FR-03)
+      operationId: create_job_api_v1_jobs_post
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_create_job_api_v1_jobs_post'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - jobs
+      summary: Riwayat job user (FR-10)
+      description: 'Daftar job milik user, terbaru dulu (FR-10).
+
+
+        Hanya job milik user yang login — tidak membocorkan job orang lain.
+
+        Pagination `limit`/`offset`; `result_deleted_at` memberitahu UI bahwa
+
+        hasil sudah dihapus retensi (tombol unduh ulang dinonaktifkan).'
+      operationId: list_jobs_api_v1_jobs_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobListOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/jobs/batch:
+    post:
+      tags:
+      - jobs
+      summary: Upload beberapa gambar sekaligus (FR-12)
+      description: 'Buat hingga `batch_max_files` job dalam satu request (FR-12).
+
+
+        Validasi SEMUA file dulu (sebelum simpan apa pun) agar request gagal
+
+        atomik: satu file tidak valid -> tidak ada job yang dibuat, kuota
+
+        tidak terpotong. Kuota dicek untuk total batch (FR-06).'
+      operationId: create_batch_jobs_api_v1_jobs_batch_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_create_batch_jobs_api_v1_jobs_batch_post'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobListOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/jobs/{job_id}:
+    get:
+      tags:
+      - jobs
+      summary: Cek status job (polling — FR-03)
+      operationId: get_job_api_v1_jobs__job_id__get
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/jobs/{job_id}/download:
+    get:
+      tags:
+      - jobs
+      summary: Unduh hasil proses (FR-05)
+      operationId: download_result_api_v1_jobs__job_id__download_get
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/quota:
+    get:
+      tags:
+      - quota
+      summary: Sisa kuota gratis hari ini (FR-06)
+      operationId: get_quota_api_v1_quota_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaOut'
+  /api/v1/account/export:
+    get:
+      tags:
+      - account
+      summary: Ekspor data pribadi (hak akses — NFR-05)
+      description: 'Salinan JSON data pribadi user: profil + meta riwayat job.
+
+
+        Sesuai UU PDP, hasil export TIDAK memuat konten biner gambar — cukup
+
+        metadata; file asli/olah tunduk retensi otomatis (FR-07).'
+      operationId: export_data_api_v1_account_export_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/v1/account:
+    delete:
+      tags:
+      - account
+      summary: Hapus akun & seluruh data (hak hapus — NFR-05)
+      description: 'Hapus akun beserta SEMUA data: job rows, file original & hasil
+        di
+
+        disk, lalu user. Cookie sesi dibersihkan (log out).
+
+
+        Idempoten: bila user tidak lagi ada, `get_current_user` sudah menolak
+
+        (401) — tidak ada partial state.'
+      operationId: delete_account_api_v1_account_delete
+      responses:
+        '204':
+          description: Successful Response
+  /api/v1/admin/stats:
+    get:
+      tags:
+      - admin
+      summary: Statistik platform (FR-13)
+      operationId: admin_stats_api_v1_admin_stats_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminStats'
+  /api/v1/admin/jobs:
+    get:
+      tags:
+      - admin
+      summary: Semua job lintas user (FR-13)
+      description: 'Daftar job (terbaru dulu) — semua user atau riwayat SATU user
+        (`email`).
+
+
+        `email` = pencocokan persis (email unik) — dipakai admin melihat
+
+        riwayat lengkap milik user tertentu.'
+      operationId: admin_jobs_api_v1_admin_jobs_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      - name: email
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Email
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminJobList'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/users:
+    get:
+      tags:
+      - admin
+      summary: Daftar user + kuota & kredit (FR-13)
+      description: 'Direktori user: email, nama, provider, kuota gratis (FR-06), saldo
+
+        kredit (FR-11), consent privasi (FR-07), dan jumlah riwayat job.
+
+
+        `email` = pencarian parsial (ilike); urut terbaru dulu.'
+      operationId: admin_users_api_v1_admin_users_get
+      parameters:
+      - name: email
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Email
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserList'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/users/{user_id}:
+    get:
+      tags:
+      - admin
+      summary: Detail satu user (profil + kuota/kredit) — FR-13
+      description: 'Profil lengkap satu user — dipakai halaman detail admin
+
+        (email, kuota, kredit, consent, jumlah riwayat job).'
+      operationId: admin_user_detail_api_v1_admin_users__user_id__get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - admin
+      summary: Aktif / nonaktifkan akun user (alat admin)
+      description: 'Toggle `is_active` user (suspend). Sesi user langsung ditolak
+        oleh
+
+        `get_current_user`; login berikutnya juga ditolak. Admin tidak bisa
+
+        menonaktifkan akun sendiri (mengunci diri).'
+      operationId: admin_user_update_api_v1_admin_users__user_id__patch
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminUserUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/users/{user_id}/transactions:
+    get:
+      tags:
+      - admin
+      summary: Transaksi kredit satu user — FR-13
+      description: 'Riwayat pembelian kredit (FR-11) milik satu user — terbaru dulu.
+
+        Dipakai halaman detail admin untuk audit transaksi.'
+      operationId: admin_user_transactions_api_v1_admin_users__user_id__transactions_get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTransactionList'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/quota/reset:
+    post:
+      tags:
+      - admin
+      summary: Reset kuota gratis user (alat admin)
+      description: 'Reset pemakaian kuota gratis (FR-06) untuk satu user atau semua.
+
+
+        Alat untuk pengelola/pengembang saat uji coba: set `used=0` dan tanggal
+
+        reset ke hari ini (WIB) — tanpa mengubah limit dari env.'
+      operationId: admin_quota_reset_api_v1_admin_quota_reset_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuotaResetRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaResetOut'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/jobs/{job_id}:
+    delete:
+      tags:
+      - admin
+      summary: Hapus job + file-nya (alat admin)
+      description: 'Hapus permanen job (baris DB + file original & hasil di disk).
+
+
+        File hanya dihapus bila berada di dalam upload_dir/result_dir (guard
+
+        path traversal via `delete_if_inside`). Dipakai pengelola membersihkan
+
+        data uji coba.'
+      operationId: admin_delete_job_api_v1_admin_jobs__job_id__delete
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Admin Delete Job Api V1 Admin Jobs  Job Id  Delete
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/export/users.csv:
+    get:
+      tags:
+      - admin
+      summary: 'Ekspor CSV: seluruh user + kuota/kredit (audit — FR-13)'
+      description: 'CSV untuk audit: email, kuota, kredit, consent, jumlah riwayat.
+
+        `email` = filter parsial (sama dengan direktori user).'
+      operationId: admin_export_users_csv_api_v1_admin_export_users_csv_get
+      parameters:
+      - name: email
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Email
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/export/jobs.csv:
+    get:
+      tags:
+      - admin
+      summary: 'Ekspor CSV: seluruh job + email pemilik (audit — FR-13)'
+      description: CSV riwayat job lintas user (atau satu user via `email` persis).
+      operationId: admin_export_jobs_csv_api_v1_admin_export_jobs_csv_get
+      parameters:
+      - name: email
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Email
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/export/transactions.csv:
+    get:
+      tags:
+      - admin
+      summary: 'Ekspor CSV: seluruh transaksi kredit + email user (audit — FR-13)'
+      description: CSV transaksi pembelian kredit (FR-11) — terbaru dulu.
+      operationId: admin_export_transactions_csv_api_v1_admin_export_transactions_csv_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/v1/admin/users/{user_id}/jobs:
+    delete:
+      tags:
+      - admin
+      summary: Hapus SEMUA job user + file-nya (alat admin)
+      description: 'Hapus permanen SEMUA job milik satu user (baris DB + file di disk).
+
+
+        Dipakai halaman detail admin untuk membersihkan data uji coba satu
+
+        user sekaligus — job milik user lain tidak tersentuh.'
+      operationId: admin_delete_user_jobs_api_v1_admin_users__user_id__jobs_delete
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Admin Delete User Jobs Api V1 Admin Users  User Id  Jobs
+                  Delete
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/b2b/jobs:
+    post:
+      tags:
+      - b2b
+      summary: 'B2B: upload gambar & mulai proses (FR-14)'
+      description: 'Pay-per-call: 1 job = 1 kredit dari saldo pemilik key.
+
+
+        Potongan kredit bersifat **atomik** (2 request bersamaan tidak bisa
+
+        memakai saldo yang sama). Tanpa saldo -> 402 Payment Required.
+
+        Status awal `queued` — job diproses worker asinkron; polling dengan
+
+        `GET /b2b/jobs/{id}` hingga `completed`.'
+      operationId: b2b_create_job_api_v1_b2b_jobs_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_b2b_create_job_api_v1_b2b_jobs_post'
+        required: true
+      responses:
+        '201':
+          description: Job dibuat (status awal `queued`) dan 1 kredit terpotong dari
+            saldo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobOut'
+        '400':
+          description: Parameter `scale`/`output_format` tidak dikenal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: scale harus salah satu dari [2, 4]
+        '402':
+          description: Saldo kredit kosong — isi lewat halaman Billing web
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: 'Saldo kredit kosong (B2B: 1 gambar = 1 kredit). Isi saldo
+                  via halaman Billing web.'
+        '413':
+          description: File melebihi batas ukuran (10 MB)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Ukuran maksimal 10 MB
+        '415':
+          description: Format file tidak didukung — hanya JPG/PNG/WebP (dicek konten)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Hanya menerima JPG, PNG, atau WebP (validasi konten, bukan
+                  ekstensi)
+        '422':
+          description: Validasi form gagal (mis. `scale` bukan int, `file` kosong)
+            — `detail` berupa LIST error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+              example:
+                detail:
+                - loc:
+                  - body
+                  - name
+                  msg: Field required
+                  type: value_error
+        '401':
+          description: Header `X-API-Key` tidak ada atau key tidak dikenal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Header X-API-Key wajib diisi (lihat /api-keys)
+        '403':
+          description: Key dinonaktifkan (dicabut) atau akun pemilik di-suspend
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: API key dinonaktifkan (dicabut oleh pemilik)
+        '429':
+          description: Rate limit per menit tier terlampaui (free 20 / pro 120)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Terlalu banyak permintaan — coba lagi beberapa saat lagi.
+  /api/v1/b2b/jobs/{job_id}:
+    get:
+      tags:
+      - b2b
+      summary: 'B2B: cek status job (polling — FR-14)'
+      description: Status job milik pemilik key — job key lain = 404 (tanpa bocor
+        info).
+      operationId: b2b_get_job_api_v1_b2b_jobs__job_id__get
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: Status job terkini (`queued`/`processing`/`completed`/`failed`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobOut'
+        '404':
+          description: Job tidak ditemukan (atau milik key lain — tanpa bocor info)
+          content:
+            application/json:
+              example:
+                detail: Job tidak ditemukan
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Header `X-API-Key` tidak ada atau key tidak dikenal
+          content:
+            application/json:
+              example:
+                detail: Header X-API-Key wajib diisi (lihat /api-keys)
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Key dinonaktifkan (dicabut) atau akun pemilik di-suspend
+          content:
+            application/json:
+              example:
+                detail: API key dinonaktifkan (dicabut oleh pemilik)
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit per menit tier terlampaui (free 20 / pro 120)
+          content:
+            application/json:
+              example:
+                detail: Terlalu banyak permintaan — coba lagi beberapa saat lagi.
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/b2b/jobs/{job_id}/result:
+    get:
+      tags:
+      - b2b
+      summary: 'B2B: unduh hasil proses (FR-14)'
+      operationId: b2b_download_result_api_v1_b2b_jobs__job_id__result_get
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: File hasil proses.
+          content:
+            application/json:
+              schema: {}
+            image/webp:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Job tidak ditemukan / file hasil tidak ada
+          content:
+            application/json:
+              example:
+                detail: Job tidak ditemukan
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Hasil belum siap — job belum `completed`
+          content:
+            application/json:
+              example:
+                detail: 'Hasil belum siap (status: processing)'
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: Hasil sudah dihapus retensi otomatis (7 hari free)
+          content:
+            application/json:
+              example:
+                detail: Hasil sudah dihapus oleh retensi otomatis.
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Header `X-API-Key` tidak ada atau key tidak dikenal
+          content:
+            application/json:
+              example:
+                detail: Header X-API-Key wajib diisi (lihat /api-keys)
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Key dinonaktifkan (dicabut) atau akun pemilik di-suspend
+          content:
+            application/json:
+              example:
+                detail: API key dinonaktifkan (dicabut oleh pemilik)
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit per menit tier terlampaui (free 20 / pro 120)
+          content:
+            application/json:
+              example:
+                detail: Terlalu banyak permintaan — coba lagi beberapa saat lagi.
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/b2b/quota:
+    get:
+      tags:
+      - b2b
+      summary: 'B2B: sisa kredit + rate limit tier'
+      operationId: b2b_quota_api_v1_b2b_quota_get
+      responses:
+        '200':
+          description: Sisa kredit dan batas rate limit tier key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/B2bQuotaOut'
+        '401':
+          description: Header `X-API-Key` tidak ada atau key tidak dikenal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Header X-API-Key wajib diisi (lihat /api-keys)
+        '403':
+          description: Key dinonaktifkan (dicabut) atau akun pemilik di-suspend
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: API key dinonaktifkan (dicabut oleh pemilik)
+        '429':
+          description: Rate limit per menit tier terlampaui (free 20 / pro 120)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Terlalu banyak permintaan — coba lagi beberapa saat lagi.
+  /api/v1/b2b/keys:
+    get:
+      tags:
+      - b2b
+      summary: Daftar API key saya (FR-14)
+      operationId: list_api_keys_api_v1_b2b_keys_get
+      responses:
+        '200':
+          description: Daftar key milik user yang login (tanpa key asli).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyList'
+        '401':
+          description: Belum login (butuh sesi cookie web)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Belum login
+    post:
+      tags:
+      - b2b
+      summary: Buat API key baru (FR-14)
+      operationId: create_api_key_api_v1_b2b_keys_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyCreateRequest'
+        required: true
+      responses:
+        '201':
+          description: Key baru dibuat — `full_key` tampil SEKALI (hanya hash SHA-256
+            tersimpan).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreated'
+        '400':
+          description: Tier tidak dikenal (harus `free` atau `pro`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: tier harus salah satu dari ['free', 'pro']
+        '422':
+          description: Validasi nama gagal — `detail` berupa LIST error; nama yang
+            hanya spasi menjawab 422 dengan `detail` string 'Nama key wajib diisi'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+              example:
+                detail:
+                - loc:
+                  - body
+                  - name
+                  msg: String should have at least 1 character
+                  type: value_error
+        '401':
+          description: Belum login (butuh sesi cookie web)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                detail: Belum login
+  /api/v1/b2b/keys/{key_id}:
+    delete:
+      tags:
+      - b2b
+      summary: Cabut (revoke) API key (FR-14)
+      operationId: revoke_api_key_api_v1_b2b_keys__key_id__delete
+      parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Key Id
+      responses:
+        '204':
+          description: Key dinonaktifkan — semua permintaan dengannya ditolak 403.
+        '404':
+          description: Key tidak ditemukan (atau milik user lain)
+          content:
+            application/json:
+              example:
+                detail: API key tidak ditemukan
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Belum login (butuh sesi cookie web)
+          content:
+            application/json:
+              example:
+                detail: Belum login
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    AdminJobList:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/AdminJobOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: AdminJobList
+    AdminJobOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        user_email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Email
+        status:
+          type: string
+          title: Status
+        scale:
+          type: integer
+          title: Scale
+        output_format:
+          type: string
+          title: Output Format
+        original_name:
+          type: string
+          title: Original Name
+        created_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Created At
+        finished_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Finished At
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+      type: object
+      required:
+      - id
+      - user_email
+      - status
+      - scale
+      - output_format
+      - original_name
+      - created_at
+      - finished_at
+      - error
+      title: AdminJobOut
+    AdminStats:
+      properties:
+        total_users:
+          type: integer
+          title: Total Users
+        users_today:
+          type: integer
+          title: Users Today
+        total_jobs:
+          type: integer
+          title: Total Jobs
+        jobs_by_status:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Jobs By Status
+        jobs_today:
+          type: integer
+          title: Jobs Today
+        free_quota_limit:
+          type: integer
+          title: Free Quota Limit
+        revenue_idr:
+          type: integer
+          title: Revenue Idr
+          default: 0
+      type: object
+      required:
+      - total_users
+      - users_today
+      - total_jobs
+      - jobs_by_status
+      - jobs_today
+      - free_quota_limit
+      title: AdminStats
+    AdminTransactionList:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/AdminTransactionOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: AdminTransactionList
+    AdminTransactionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        order_id:
+          type: string
+          title: Order Id
+        provider:
+          type: string
+          title: Provider
+        package_slug:
+          type: string
+          title: Package Slug
+        amount_idr:
+          type: integer
+          title: Amount Idr
+        credits:
+          type: integer
+          title: Credits
+        status:
+          type: string
+          title: Status
+        created_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Created At
+        paid_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Paid At
+      type: object
+      required:
+      - id
+      - order_id
+      - provider
+      - package_slug
+      - amount_idr
+      - credits
+      - status
+      - created_at
+      - paid_at
+      title: AdminTransactionOut
+      description: Transaksi kredit (FR-11) milik satu user — untuk detail user admin.
+    AdminUserList:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/AdminUserOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: AdminUserList
+    AdminUserOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        email:
+          type: string
+          title: Email
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        provider:
+          type: string
+          title: Provider
+        is_active:
+          type: boolean
+          title: Is Active
+        created_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Created At
+        privacy_consent_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Privacy Consent At
+        quota_used:
+          type: integer
+          title: Quota Used
+        quota_limit:
+          type: integer
+          title: Quota Limit
+        quota_remaining:
+          type: integer
+          title: Quota Remaining
+        credit_balance:
+          type: integer
+          title: Credit Balance
+        job_count:
+          type: integer
+          title: Job Count
+      type: object
+      required:
+      - id
+      - email
+      - name
+      - provider
+      - is_active
+      - created_at
+      - privacy_consent_at
+      - quota_used
+      - quota_limit
+      - quota_remaining
+      - credit_balance
+      - job_count
+      title: AdminUserOut
+      description: Profil user + pemakaian kuota/kredit + jumlah riwayat (FR-13).
+    AdminUserUpdate:
+      properties:
+        is_active:
+          type: boolean
+          title: Is Active
+      type: object
+      required:
+      - is_active
+      title: AdminUserUpdate
+      description: Update profil oleh admin — saat ini hanya toggle aktif/nonaktif.
+    ApiKeyCreateRequest:
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Name
+          description: Label bebas, mis. `Produksi` / `Staging`.
+        tier:
+          type: string
+          title: Tier
+          description: 'Tier key: `free` (20 req/menit) atau `pro` (120 req/menit).'
+          default: free
+      type: object
+      required:
+      - name
+      title: ApiKeyCreateRequest
+      description: Buat key baru; `tier` menentukan rate limit per menit.
+      examples:
+      - name: Produksi
+        tier: pro
+    ApiKeyCreated:
+      properties:
+        key:
+          $ref: '#/components/schemas/ApiKeyOut'
+          description: Metadata key (tanpa key asli).
+        full_key:
+          type: string
+          title: Full Key
+          description: Key asli (`jn_...`) — TAMPILKAN SEKALI dan simpan; tidak akan
+            pernah muncul lagi.
+      type: object
+      required:
+      - key
+      - full_key
+      title: ApiKeyCreated
+      description: Respons pembuatan key — memuat key asli SEKALI SAJA.
+    ApiKeyList:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ApiKeyOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: ApiKeyList
+    ApiKeyOut:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: ID key (dipakai untuk mencabut key).
+        name:
+          type: string
+          title: Name
+          description: Label bebas dari developer.
+        key_prefix:
+          type: string
+          title: Key Prefix
+          description: Awalan pendek key untuk tampilan, mis. `jn_AbC123xYz`.
+        tier:
+          type: string
+          title: Tier
+          description: 'Tier key: `free` (20 req/menit) atau `pro` (120 req/menit).'
+        is_active:
+          type: boolean
+          title: Is Active
+          description: '`false` setelah key dicabut.'
+        created_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Created At
+          description: Waktu key dibuat.
+        last_used_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Used At
+          description: Terakhir kali key dipakai (audit).
+        revoked_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Revoked At
+          description: Waktu pencabutan key (None = aktif).
+      type: object
+      required:
+      - id
+      - name
+      - key_prefix
+      - tier
+      - is_active
+      title: ApiKeyOut
+      description: Key yang ditampilkan di halaman /api-keys (TANPA key asli).
+    B2bQuotaOut:
+      properties:
+        credit_balance:
+          type: integer
+          title: Credit Balance
+          description: Sisa kredit pemilik key (1 job = 1 kredit).
+        tier:
+          type: string
+          title: Tier
+          description: 'Tier key: `free` atau `pro` (menentukan rate limit).'
+        rate_limit_per_minute:
+          type: integer
+          title: Rate Limit Per Minute
+          description: Batas permintaan per menit untuk tier ini.
+      type: object
+      required:
+      - credit_balance
+      - tier
+      - rate_limit_per_minute
+      title: B2bQuotaOut
+      description: Sisa kredit + info tier untuk developer (FR-14).
+    Body_b2b_create_job_api_v1_b2b_jobs_post:
+      properties:
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          title: File
+          description: 'Gambar input: JPG/PNG/WebP, maks 10 MB (validasi magic bytes,
+            bukan ekstensi).'
+        scale:
+          type: integer
+          title: Scale
+          description: Faktor pembesaran (2x atau 4x).
+          default: 2
+          examples:
+          - 2
+          - 4
+        output_format:
+          type: string
+          title: Output Format
+          description: 'Format hasil: `webp` (default, terbaik), `jpeg`, atau `png`
+            (lossless — ukuran file bisa jauh lebih besar).'
+          default: webp
+          examples:
+          - webp
+          - jpeg
+          - png
+        face_enhance:
+          type: boolean
+          title: Face Enhance
+          description: Restorasi wajah (GFPGAN) — memperjelas wajah pada foto lama.
+          default: false
+        denoise:
+          type: boolean
+          title: Denoise
+          description: Kurangi noise/grain pada foto lama.
+          default: false
+        color_enhance:
+          type: boolean
+          title: Color Enhance
+          description: Pertegas warna (saturasi/kontras) untuk foto pudar.
+          default: false
+      type: object
+      required:
+      - file
+      title: Body_b2b_create_job_api_v1_b2b_jobs_post
+    Body_create_batch_jobs_api_v1_jobs_batch_post:
+      properties:
+        files:
+          items:
+            type: string
+            contentMediaType: application/octet-stream
+          type: array
+          title: Files
+        scale:
+          type: integer
+          title: Scale
+          default: 2
+        output_format:
+          type: string
+          title: Output Format
+          default: webp
+        face_enhance:
+          type: boolean
+          title: Face Enhance
+          default: false
+        denoise:
+          type: boolean
+          title: Denoise
+          default: false
+        color_enhance:
+          type: boolean
+          title: Color Enhance
+          default: false
+      type: object
+      required:
+      - files
+      title: Body_create_batch_jobs_api_v1_jobs_batch_post
+    Body_create_job_api_v1_jobs_post:
+      properties:
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          title: File
+        scale:
+          type: integer
+          title: Scale
+          default: 2
+        output_format:
+          type: string
+          title: Output Format
+          default: webp
+        face_enhance:
+          type: boolean
+          title: Face Enhance
+          default: false
+        denoise:
+          type: boolean
+          title: Denoise
+          default: false
+        color_enhance:
+          type: boolean
+          title: Color Enhance
+          default: false
+      type: object
+      required:
+      - file
+      title: Body_create_job_api_v1_jobs_post
+    CheckResult:
+      properties:
+        name:
+          type: string
+          title: Name
+        status:
+          type: string
+          title: Status
+        detail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Detail
+      type: object
+      required:
+      - name
+      - status
+      title: CheckResult
+      description: Hasil cek satu dependensi (readiness, NFR-08).
+    CheckoutOut:
+      properties:
+        order_id:
+          type: string
+          title: Order Id
+        snap_token:
+          type: string
+          title: Snap Token
+        redirect_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Redirect Url
+        credits:
+          type: integer
+          title: Credits
+        amount_idr:
+          type: integer
+          title: Amount Idr
+      type: object
+      required:
+      - order_id
+      - snap_token
+      - credits
+      - amount_idr
+      title: CheckoutOut
+    CheckoutRequest:
+      properties:
+        package_slug:
+          type: string
+          maxLength: 50
+          minLength: 1
+          title: Package Slug
+      type: object
+      required:
+      - package_slug
+      title: CheckoutRequest
+    ErrorResponse:
+      properties:
+        detail:
+          type: string
+          title: Detail
+      type: object
+      required:
+      - detail
+      title: ErrorResponse
+      description: 'Bentuk tubuh respons error — FastAPI HTTPException selalu `{"detail":
+        ...}`.'
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    HealthResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        service:
+          type: string
+          title: Service
+        version:
+          type: string
+          title: Version
+        environment:
+          type: string
+          title: Environment
+        checks:
+          items:
+            $ref: '#/components/schemas/CheckResult'
+          type: array
+          title: Checks
+          default: []
+      type: object
+      required:
+      - status
+      - service
+      - version
+      - environment
+      title: HealthResponse
+    JobListOut:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/JobOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: JobListOut
+      description: Halaman riwayat job user (FR-10).
+    JobOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        status:
+          type: string
+          title: Status
+        scale:
+          type: integer
+          title: Scale
+        output_format:
+          type: string
+          title: Output Format
+        face_enhance:
+          type: boolean
+          title: Face Enhance
+          default: false
+        denoise:
+          type: boolean
+          title: Denoise
+          default: false
+        color_enhance:
+          type: boolean
+          title: Color Enhance
+          default: false
+        original_name:
+          type: string
+          title: Original Name
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        finished_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Finished At
+        result_deleted_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Result Deleted At
+      type: object
+      required:
+      - id
+      - status
+      - scale
+      - output_format
+      - original_name
+      - error
+      - created_at
+      - finished_at
+      title: JobOut
+    LoginRequest:
+      properties:
+        email:
+          type: string
+          format: email
+          title: Email
+        password:
+          type: string
+          title: Password
+      type: object
+      required:
+      - email
+      - password
+      title: LoginRequest
+    PackageOut:
+      properties:
+        slug:
+          type: string
+          title: Slug
+        credits:
+          type: integer
+          title: Credits
+        price_idr:
+          type: integer
+          title: Price Idr
+      type: object
+      required:
+      - slug
+      - credits
+      - price_idr
+      title: PackageOut
+    PackagesOut:
+      properties:
+        credit_balance:
+          type: integer
+          title: Credit Balance
+        packages:
+          items:
+            $ref: '#/components/schemas/PackageOut'
+          type: array
+          title: Packages
+      type: object
+      required:
+      - credit_balance
+      - packages
+      title: PackagesOut
+    QuotaOut:
+      properties:
+        limit:
+          type: integer
+          title: Limit
+        used:
+          type: integer
+          title: Used
+        remaining:
+          type: integer
+          title: Remaining
+        reset_date:
+          type: string
+          title: Reset Date
+        credit_balance:
+          type: integer
+          title: Credit Balance
+          default: 0
+        total_slots:
+          type: integer
+          title: Total Slots
+          default: 0
+      type: object
+      required:
+      - limit
+      - used
+      - remaining
+      - reset_date
+      title: QuotaOut
+    QuotaResetOut:
+      properties:
+        reset:
+          type: integer
+          title: Reset
+        email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Email
+      type: object
+      required:
+      - reset
+      - email
+      title: QuotaResetOut
+    QuotaResetRequest:
+      properties:
+        email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Email
+        all:
+          type: boolean
+          title: All
+          default: false
+      type: object
+      title: QuotaResetRequest
+      description: 'Target reset kuota: `email` satu user ATAU `all=true` (semua).'
+    RegisterRequest:
+      properties:
+        email:
+          type: string
+          format: email
+          title: Email
+        password:
+          type: string
+          maxLength: 128
+          minLength: 8
+          title: Password
+        name:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Name
+        privacy_consent:
+          type: boolean
+          title: Privacy Consent
+          description: Persetujuan kebijakan privasi (FR-07)
+          default: false
+      type: object
+      required:
+      - email
+      - password
+      - name
+      title: RegisterRequest
+    TransactionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        order_id:
+          type: string
+          title: Order Id
+        package_slug:
+          type: string
+          title: Package Slug
+        amount_idr:
+          type: integer
+          title: Amount Idr
+        credits:
+          type: integer
+          title: Credits
+        status:
+          type: string
+          title: Status
+        created_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Created At
+        paid_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Paid At
+      type: object
+      required:
+      - id
+      - order_id
+      - package_slug
+      - amount_idr
+      - credits
+      - status
+      title: TransactionOut
+    TransactionsOut:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/TransactionOut'
+          type: array
+          title: Items
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - total
+      title: TransactionsOut
+    UserOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        email:
+          type: string
+          format: email
+          title: Email
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        provider:
+          type: string
+          title: Provider
+        privacy_consent_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Privacy Consent At
+        is_admin:
+          type: boolean
+          title: Is Admin
+          default: false
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - id
+      - email
+      - name
+      - provider
+      - created_at
+      title: UserOut
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    ValidationErrorItem:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Loc
+        msg:
+          type: string
+          title: Msg
+        type:
+          type: string
+          title: Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationErrorItem
+      description: Satu item error validasi (bentuk 422 standar FastAPI).
+tags:
+- name: b2b
+  description: '**API Publik B2B (FR-14)** untuk developer. Autentikasi via header
+    `X-API-Key` (buat di halaman web **/api-keys**); 1 job = 1 kredit dari saldo pemilik
+    key (pay-per-call, tanpa saldo -> 402). Rate limit per menit per tier: **free
+    20 / pro 120** (NFR-04).'

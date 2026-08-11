@@ -65,6 +65,10 @@ Monorepo platform web untuk peningkatan kualitas foto/gambar (super-resolution, 
 - **Smoke test E2E mode produksi** (broker nyata, bukan eager):
   `cd api && .venv/Scripts/python scripts/smoke_test_b2b.py [--base-url https://api.example.id]`
   — alur lengkap register/login → buat key → upload → polling → unduh → potongan kredit → cabut key (403).
+- **Dokumentasi lengkap**: [docs/API_B2B.md](./docs/API_B2B.md) (panduan developer:
+  autentikasi, endpoint, kode error, rate limit, contoh integrasi Python/Node).
+  Spesifikasi OpenAPI: `docs/api/openapi.yaml` (regenerate:
+  `cd api && .venv/Scripts/python scripts/export_openapi.py`); interaktif di `/docs` (Swagger UI).
 
 ## Migrasi Database (ADR-011)
 

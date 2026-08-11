@@ -36,6 +36,12 @@ api/storage/
 api/gfpgan/
 api/facexlib/
 
+# --- Celery Beat (FR-07) ---
+# File jadwal beat ditulis ke CWD (di compose: /app = ./api termount).
+# Jangan commit — artefak runtime, bukan kode.
+celerybeat-schedule*
+celerybeat.pid
+
 # --- misc ---
 .DS_Store
 *.log

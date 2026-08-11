@@ -62,6 +62,9 @@ Monorepo platform web untuk peningkatan kualitas foto/gambar (super-resolution, 
 - Endpoint: `POST /api/v1/b2b/jobs` (upload + mulai proses) · `GET /api/v1/b2b/jobs/{id}` (status) · `GET /api/v1/b2b/jobs/{id}/result` (unduh hasil) · `GET /api/v1/b2b/quota` (sisa kredit + tier).
 - **Rate limit per menit per key** berdasarkan tier (env `API_RATE_LIMIT_FREE_PER_MINUTE` default 20 / `API_RATE_LIMIT_PRO_PER_MINUTE` default 120).
 - Job B2B yang gagal **di-refund otomatis 1 kredit** (sama dengan alur kredit FR-11); job tercatat di riwayat pemilik.
+- **Smoke test E2E mode produksi** (broker nyata, bukan eager):
+  `cd api && .venv/Scripts/python scripts/smoke_test_b2b.py [--base-url https://api.example.id]`
+  — alur lengkap register/login → buat key → upload → polling → unduh → potongan kredit → cabut key (403).
 
 ## Migrasi Database (ADR-011)
 

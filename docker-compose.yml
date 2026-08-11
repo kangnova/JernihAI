@@ -39,6 +39,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # EKSPLISIT non-eager: bind mount ./api:/app membuat host api/.env
+      # (dev: eager=true) ikut terbaca container — env compose menang atas
+      # file .env, jadi mode produksi tidak pernah diam-diam jadi eager.
+      CELERY_TASK_ALWAYS_EAGER: "false"
       CORS_ORIGINS: '["http://localhost:3000"]'
       JWT_SECRET: ${JWT_SECRET:-dev-secret-ganti-di-produksi-0123456789abcdef}
       WEB_URL: http://localhost:3000
@@ -67,6 +71,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # Sama seperti api: non-eager eksplisit (lihat komentar di service api).
+      CELERY_TASK_ALWAYS_EAGER: "false"
     volumes:
       - ./api:/app
     depends_on:
@@ -112,6 +118,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      CELERY_TASK_ALWAYS_EAGER: "false"
     deploy:
       resources:
         reservations:

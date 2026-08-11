@@ -110,6 +110,12 @@ async def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email atau password salah",
         )
+    if not user.is_active:
+        # Akun dinonaktifkan oleh pengelola (alat admin) — tolak login.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akun dinonaktifkan. Hubungi pengelola.",
+        )
 
     set_auth_cookie(response, create_access_token(user.id))
     return user
@@ -222,6 +228,12 @@ async def google_callback(
         db.add(user)
         await db.commit()
         await db.refresh(user)
+    elif not user.is_active:
+        # Akun dinonaktifkan oleh pengelola — tolak masuk Google OAuth.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Akun dinonaktifkan. Hubungi pengelola.",
+        )
 
     response = RedirectResponse(url=settings.web_url, status_code=status.HTTP_303_SEE_OTHER)
     set_auth_cookie(response, create_access_token(user.id))

@@ -5,9 +5,11 @@ Hanya untuk email yang terdaftar di `ADMIN_EMAILS` (lihat
 mengembalikan nol.
 """
 
+import csv
+import io
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,6 +96,11 @@ class QuotaResetRequest(BaseModel):
     """Target reset kuota: `email` satu user ATAU `all=true` (semua)."""
     email: str | None = None
     all: bool = False
+
+
+class AdminUserUpdate(BaseModel):
+    """Update profil oleh admin — saat ini hanya toggle aktif/nonaktif."""
+    is_active: bool
 
 
 class QuotaResetOut(BaseModel):
@@ -297,6 +304,46 @@ async def admin_user_detail(
     return out
 
 
+@router.patch(
+    "/users/{user_id}",
+    response_model=AdminUserOut,
+    summary="Aktif / nonaktifkan akun user (alat admin)",
+)
+async def admin_user_update(
+    user_id: str,
+    body: AdminUserUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> AdminUserOut:
+    """Toggle `is_active` user (suspend). Sesi user langsung ditolak oleh
+    `get_current_user`; login berikutnya juga ditolak. Admin tidak bisa
+    menonaktifkan akun sendiri (mengunci diri).
+    """
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User tidak ditemukan"
+        )
+    if user.id == current_user.id and not body.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tidak bisa menonaktifkan akun sendiri",
+        )
+
+    user.is_active = body.is_active
+    await db.commit()
+
+    job_count = (
+        await db.scalar(
+            select(func.count()).select_from(Job).where(Job.user_id == user.id)
+        )
+        or 0
+    )
+    out = _admin_user_out(user, job_count)
+    await db.commit()  # persist lazy reset kuota
+    return out
+
+
 @router.get(
     "/users/{user_id}/transactions",
     response_model=AdminTransactionList,
@@ -434,6 +481,196 @@ async def admin_delete_job(
     await db.delete(job)
     await db.commit()
     return {"deleted": True, "id": job_id, "files_deleted": files_deleted}
+
+
+def _csv_response(
+    columns: list[str], rows: list[list[object]], filename: str
+) -> Response:
+    """Bangun respons CSV dengan BOM UTF-8 (agar Excel membaca huruf
+    Indonesia/emoji dengan benar) + header unduhan attachment."""
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\r\n")
+    writer.writerow(columns)
+    writer.writerows(rows)
+    return Response(
+        content="\ufeff" + buf.getvalue(),  # BOM UTF-8
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/export/users.csv",
+    summary="Ekspor CSV: seluruh user + kuota/kredit (audit — FR-13)",
+)
+async def admin_export_users_csv(
+    email: str | None = Query(None, max_length=255),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Response:
+    """CSV untuk audit: email, kuota, kredit, consent, jumlah riwayat.
+    `email` = filter parsial (sama dengan direktori user).
+    """
+    filters = [User.email.ilike(f"%{email}%")] if email else []
+    users = (await db.execute(select(User).where(*filters))).scalars()
+    job_counts = dict(
+        (
+            await db.execute(
+                select(Job.user_id, func.count()).group_by(Job.user_id)
+            )
+        ).all()
+    )
+    rows = []
+    for user in users:
+        rows.append(
+            [
+                user.id,
+                user.email,
+                user.name or "",
+                user.provider,
+                "aktif" if user.is_active else "nonaktif",
+                user.created_at.isoformat() if user.created_at else "",
+                user.privacy_consent_at.isoformat()
+                if user.privacy_consent_at
+                else "",
+                user.free_daily_quota_used or 0,
+                quota_limit(),
+                quota_remaining(user),
+                user.credit_balance or 0,
+                job_counts.get(user.id, 0),
+            ]
+        )
+    await db.commit()  # persist lazy reset kuota
+    return _csv_response(
+        [
+            "id",
+            "email",
+            "nama",
+            "provider",
+            "status",
+            "dibuat",
+            "consent_privasi",
+            "kuota_terpakai",
+            "kuota_limit",
+            "kuota_sisa",
+            "kredit",
+            "jumlah_job",
+        ],
+        rows,
+        "jernihai-users.csv",
+    )
+
+
+@router.get(
+    "/export/jobs.csv",
+    summary="Ekspor CSV: seluruh job + email pemilik (audit — FR-13)",
+)
+async def admin_export_jobs_csv(
+    email: str | None = Query(None, max_length=255),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Response:
+    """CSV riwayat job lintas user (atau satu user via `email` persis)."""
+    rows_query = (
+        select(Job, User.email)
+        .join(User, Job.user_id == User.id, isouter=True)
+        .order_by(Job.created_at.desc(), Job.id.desc())
+    )
+    if email:
+        rows_query = rows_query.where(User.email == email)
+    rows = [
+        [
+            job.id,
+            user_email or "",
+            job.original_name,
+            job.status,
+            job.scale,
+            job.output_format,
+            "ya" if job.face_enhance else "tidak",
+            "ya" if job.denoise else "tidak",
+            "ya" if job.color_enhance else "tidak",
+            "ya" if job.uses_credit else "tidak",
+            job.created_at.isoformat() if job.created_at else "",
+            job.finished_at.isoformat() if job.finished_at else "",
+            job.error or "",
+            job.original_deleted_at.isoformat()
+            if job.original_deleted_at
+            else "",
+            job.result_deleted_at.isoformat() if job.result_deleted_at else "",
+        ]
+        for job, user_email in (await db.execute(rows_query)).all()
+    ]
+    return _csv_response(
+        [
+            "id",
+            "email",
+            "nama_file",
+            "status",
+            "skala",
+            "format",
+            "face_enhance",
+            "denoise",
+            "color_enhance",
+            "pakai_kredit",
+            "dibuat",
+            "selesai",
+            "error",
+            "original_dihapus",
+            "hasil_dihapus",
+        ],
+        rows,
+        "jernihai-jobs.csv",
+    )
+
+
+@router.get(
+    "/export/transactions.csv",
+    summary="Ekspor CSV: seluruh transaksi kredit + email user (audit — FR-13)",
+)
+async def admin_export_transactions_csv(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> Response:
+    """CSV transaksi pembelian kredit (FR-11) — terbaru dulu."""
+    rows = [
+        [
+            t.id,
+            user_email or "",
+            t.order_id,
+            t.provider,
+            t.provider_txn_id or "",
+            t.package_slug,
+            t.amount_idr,
+            t.credits,
+            t.status,
+            t.created_at.isoformat() if t.created_at else "",
+            t.paid_at.isoformat() if t.paid_at else "",
+        ]
+        for t, user_email in (
+            await db.execute(
+                select(Transaction, User.email)
+                .join(User, Transaction.user_id == User.id, isouter=True)
+                .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+            )
+        ).all()
+    ]
+    return _csv_response(
+        [
+            "id",
+            "email",
+            "order_id",
+            "provider",
+            "provider_txn_id",
+            "paket",
+            "jumlah_idr",
+            "kredit",
+            "status",
+            "dibuat",
+            "dibayar",
+        ],
+        rows,
+        "jernihai-transactions.csv",
+    )
 
 
 @router.delete(

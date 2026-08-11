@@ -12,6 +12,7 @@ import {
   listAdminJobs,
   listAdminUserTransactions,
   resetAdminQuota,
+  setAdminUserActive,
 } from "@/lib/api";
 import {
   STATUS_LABEL,
@@ -36,6 +37,7 @@ export default function AdminUserDetailPage() {
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
   const [busyReset, setBusyReset] = useState(false);
   const [busyDeleteAll, setBusyDeleteAll] = useState(false);
+  const [busyActive, setBusyActive] = useState(false);
 
   const loadUser = useCallback(async () => {
     const u = await getAdminUser(id);
@@ -110,6 +112,35 @@ export default function AdminUserDetailPage() {
       );
     } finally {
       setBusyReset(false);
+    }
+  }
+
+  async function handleToggleActive() {
+    if (!profile) return;
+    const deactivating = profile.is_active;
+    if (
+      deactivating &&
+      !window.confirm(
+        `Nonaktifkan akun ${profile.email}?\n\nUser tidak bisa login lagi; sesi yang sedang berjalan langsung ditolak.`,
+      )
+    )
+      return;
+    setBusyActive(true);
+    setActionMsg(null);
+    try {
+      const updated = await setAdminUserActive(profile.id, !deactivating);
+      setProfile(updated);
+      setActionMsg(
+        deactivating
+          ? `Akun ${updated.email} dinonaktifkan.`
+          : `Akun ${updated.email} diaktifkan kembali.`,
+      );
+    } catch (err) {
+      setActionMsg(
+        `Gagal ubah status: ${err instanceof Error ? err.message : "kesalahan"}`,
+      );
+    } finally {
+      setBusyActive(false);
     }
   }
 
@@ -218,15 +249,38 @@ export default function AdminUserDetailPage() {
                     <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-slate-300">
                       {profile.job_count} job
                     </span>
+                    {!profile.is_active && (
+                      <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-rose-300">
+                        Nonaktif (suspend)
+                      </span>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleResetQuota}
-                    disabled={busyReset}
-                    className="rounded-lg border border-indigo-400/30 bg-indigo-500/10 px-3 py-1.5 text-sm font-medium text-indigo-300 transition-colors hover:bg-indigo-500/20 disabled:opacity-40"
-                  >
-                    {busyReset ? "…" : "Reset kuota"}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleToggleActive}
+                      disabled={busyActive}
+                      className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 ${
+                        profile.is_active
+                          ? "border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20"
+                          : "border-emerald-400/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                      }`}
+                    >
+                      {busyActive
+                        ? "…"
+                        : profile.is_active
+                          ? "Nonaktifkan akun"
+                          : "Aktifkan akun"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetQuota}
+                      disabled={busyReset}
+                      className="rounded-lg border border-indigo-400/30 bg-indigo-500/10 px-3 py-1.5 text-sm font-medium text-indigo-300 transition-colors hover:bg-indigo-500/20 disabled:opacity-40"
+                    >
+                      {busyReset ? "…" : "Reset kuota"}
+                    </button>
+                  </div>
                 </div>
               </div>
               {actionMsg && (

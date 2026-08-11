@@ -406,6 +406,207 @@ async def test_admin_delete_all_user_jobs(db, client, monkeypatch, tmp_path):
     assert resp.status_code == 404
 
 
+# --- Toggle aktif/nonaktif akun (suspend) ---
+
+
+async def test_admin_toggle_user_active(client, monkeypatch):
+    """Suspend -> is_active false & login ditolak; reaktivasi -> login sukses lagi."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "korban@example.com")
+
+    # Login korban sukses saat aktif.
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "korban@example.com", "password": "password123"},
+    )
+    assert resp.status_code == 200
+
+    await _login(client, "boss@example.com")
+    korban_id = await _user_id_by_email(client, "korban@example.com")
+    resp = await client.patch(
+        f"/api/v1/admin/users/{korban_id}", json={"is_active": False}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_active"] is False
+
+    # Login korban ditolak (403 — akun dinonaktifkan).
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "korban@example.com", "password": "password123"},
+    )
+    assert resp.status_code == 403
+
+    # Reaktivasi -> login korban sukses lagi.
+    resp = await client.patch(
+        f"/api/v1/admin/users/{korban_id}", json={"is_active": True}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_active"] is True
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "korban@example.com", "password": "password123"},
+    )
+    assert resp.status_code == 200
+
+
+async def test_admin_suspend_kills_existing_session(client, monkeypatch):
+    """Sesi yang sudah login langsung ditolak setelah suspend (get_current_user)."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "korban@example.com")
+    korban_token = client.cookies.get(settings.cookie_name)
+    assert korban_token is not None
+    assert (await client.get("/api/v1/auth/me")).status_code == 200
+
+    await _login(client, "boss@example.com")
+    korban_id = await _user_id_by_email(client, "korban@example.com")
+    await client.patch(f"/api/v1/admin/users/{korban_id}", json={"is_active": False})
+
+    # Pakai token korban yang lama -> 401.
+    resp = await client.get(
+        "/api/v1/auth/me", cookies={settings.cookie_name: korban_token}
+    )
+    assert resp.status_code == 401
+
+
+async def test_admin_cannot_deactivate_self(client, monkeypatch):
+    """Admin tidak bisa menonaktifkan akun sendiri (mengunci diri)."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    boss_id = await _user_id_by_email(client, "boss@example.com")
+
+    resp = await client.patch(
+        f"/api/v1/admin/users/{boss_id}", json={"is_active": False}
+    )
+    assert resp.status_code == 400
+    # Mengaktifkan diri sendiri tetap boleh (no-op aman).
+    resp = await client.patch(
+        f"/api/v1/admin/users/{boss_id}", json={"is_active": True}
+    )
+    assert resp.status_code == 200
+
+
+async def test_admin_toggle_unknown_and_denied(client, monkeypatch):
+    """404 user tak dikenal; 403 utk user biasa."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+
+    resp = await client.patch(
+        "/api/v1/admin/users/tidak-ada", json={"is_active": False}
+    )
+    assert resp.status_code == 404
+
+    await _register(client, "biasa@example.com")
+    resp = await client.patch(
+        "/api/v1/admin/users/some-id", json={"is_active": False}
+    )
+    assert resp.status_code == 403
+
+
+# --- Ekspor CSV untuk audit (FR-13) ---
+
+
+def _assert_csv(resp) -> None:
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert "attachment" in resp.headers["content-disposition"]
+
+
+async def test_admin_export_users_csv(client, monkeypatch):
+    """CSV user: header + baris data + filter parsial email."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "target@example.com")
+    await _upload(client)  # 1 job atas nama target
+    await _login(client, "boss@example.com")
+
+    resp = await client.get("/api/v1/admin/export/users.csv")
+    _assert_csv(resp)
+    text = resp.text
+    assert "email" in text and "jumlah_job" in text
+    assert "target@example.com" in text
+
+    # Filter parsial email.
+    resp = await client.get("/api/v1/admin/export/users.csv?email=boss")
+    _assert_csv(resp)
+    assert "boss@example.com" in resp.text
+    assert "target@example.com" not in resp.text
+
+
+async def test_admin_export_jobs_csv(client, monkeypatch):
+    """CSV job: email pemilik + nama file; filter email persis."""
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "korban@example.com")
+    await _upload(client)
+    await _login(client, "boss@example.com")
+
+    resp = await client.get("/api/v1/admin/export/jobs.csv?email=korban@example.com")
+    _assert_csv(resp)
+    text = resp.text
+    assert "nama_file" in text
+    assert "foto.png" in text
+    assert "korban@example.com" in text
+
+    # Tanpa filter = semua job.
+    resp = await client.get("/api/v1/admin/export/jobs.csv")
+    _assert_csv(resp)
+    assert "foto.png" in resp.text
+
+
+async def test_admin_export_transactions_csv(db, client, monkeypatch):
+    """CSV transaksi kredit: order_id + email pemilik."""
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from sqlalchemy import select
+
+    from app.models.transaction import Transaction, TransactionStatus
+    from app.models.user import User
+
+    monkeypatch.setattr(settings, "admin_emails", ["boss@example.com"])
+    await _register(client, "boss@example.com")
+    await _register(client, "target@example.com")
+
+    async with db() as session:
+        target = (
+            await session.execute(
+                select(User).where(User.email == "target@example.com")
+            )
+        ).scalar_one()
+        session.add(
+            Transaction(
+                id=str(uuid4()),
+                user_id=target.id,
+                order_id="ORD-CSV-001",
+                package_slug="mini",
+                amount_idr=20000,
+                credits=25,
+                status=TransactionStatus.PAID.value,
+                created_at=datetime(2026, 8, 2, 3, 0, tzinfo=UTC),
+                paid_at=datetime(2026, 8, 2, 3, 5, tzinfo=UTC),
+            )
+        )
+        await session.commit()
+
+    await _login(client, "boss@example.com")
+    resp = await client.get("/api/v1/admin/export/transactions.csv")
+    _assert_csv(resp)
+    text = resp.text
+    assert "order_id" in text
+    assert "ORD-CSV-001" in text
+    assert "target@example.com" in text
+
+
+async def test_admin_export_denied_for_regular_user(client):
+    """User biasa tidak boleh mengekspor CSV."""
+    await _register(client)
+    for kind in ("users", "jobs", "transactions"):
+        resp = await client.get(f"/api/v1/admin/export/{kind}.csv")
+        assert resp.status_code == 403
+
+
 async def test_admin_user_transactions(db, client, monkeypatch):
     """Transaksi kredit milik satu user — terbaru dulu, tanpa bocor antar user."""
     from datetime import UTC, datetime

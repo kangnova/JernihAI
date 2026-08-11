@@ -295,6 +295,17 @@ export async function getAdminUser(userId: string): Promise<AdminUser> {
   return apiFetch<AdminUser>(`/api/v1/admin/users/${userId}`);
 }
 
+// Aktif / nonaktifkan akun user (suspend) — halaman detail admin.
+export async function setAdminUserActive(
+  userId: string,
+  isActive: boolean,
+): Promise<AdminUser> {
+  return apiFetch<AdminUser>(`/api/v1/admin/users/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_active: isActive }),
+  });
+}
+
 // Transaksi kredit (FR-11) milik satu user — halaman detail admin.
 export interface AdminTransaction {
   id: string;
@@ -352,6 +363,19 @@ export async function deleteAdminUserJobs(
     `/api/v1/admin/users/${userId}/jobs`,
     { method: "DELETE" },
   );
+}
+
+// Ekspor CSV untuk audit (FR-13): users / jobs / transactions.
+export type AdminCsvKind = "users" | "jobs" | "transactions";
+
+export async function exportAdminCsv(kind: AdminCsvKind): Promise<Blob> {
+  const res = await fetch(`${API_URL}/api/v1/admin/export/${kind}.csv`, {
+    credentials: "include",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, "Gagal mengekspor CSV");
+  }
+  return res.blob();
 }
 
 // --- Billing & kredit (FR-11 — Midtrans) ---

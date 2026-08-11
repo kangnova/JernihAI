@@ -4,9 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
-import type { AdminJob, AdminStats, AdminUser, JobStatus } from "@/lib/api";
+import type {
+  AdminCsvKind,
+  AdminJob,
+  AdminStats,
+  AdminUser,
+  JobStatus,
+} from "@/lib/api";
 import {
   deleteAdminJob,
+  exportAdminCsv,
   getAdminStats,
   listAdminJobs,
   listAdminUsers,
@@ -110,6 +117,26 @@ export default function AdminPage() {
       );
     } finally {
       setBusyJobId(null);
+    }
+  }
+
+  async function handleExportCsv(kind: AdminCsvKind, label: string) {
+    setToolMsg(null);
+    try {
+      const blob = await exportAdminCsv(kind);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `jernihai-${kind}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setToolMsg(`CSV ${label} diunduh.`);
+    } catch (err) {
+      setToolMsg(
+        `Gagal ekspor: ${err instanceof Error ? err.message : "terjadi kesalahan"}`,
+      );
     }
   }
 
@@ -252,6 +279,11 @@ export default function AdminPage() {
                           Google
                         </span>
                       )}
+                      {!u.is_active && (
+                        <span className="ml-2 rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-300">
+                          Nonaktif
+                        </span>
+                      )}
                     </p>
                     <p className="text-xs text-slate-500">
                       {u.name ?? "—"} · daftar {formatDate(u.created_at)}
@@ -334,6 +366,40 @@ export default function AdminPage() {
             </button>
           </div>
           {toolMsg && <p className="mt-3 text-sm text-slate-300">{toolMsg}</p>}
+        </div>
+
+        {/* Ekspor CSV untuk audit (FR-13) */}
+        <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+          <p className="mb-1 text-sm font-medium text-slate-300">
+            Ekspor CSV (audit)
+          </p>
+          <p className="mb-4 text-xs text-slate-500">
+            Unduh seluruh data user, riwayat job, atau transaksi kredit dalam
+            format CSV (UTF-8, siap dibuka di Excel).
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => handleExportCsv("users", "user")}
+              className="rounded-lg border border-indigo-400/30 bg-indigo-500/10 px-4 py-2 text-sm font-medium text-indigo-300 transition-colors hover:bg-indigo-500/20"
+            >
+              ⬇ User
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExportCsv("jobs", "job")}
+              className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-500/20"
+            >
+              ⬇ Job
+            </button>
+            <button
+              type="button"
+              onClick={() => handleExportCsv("transactions", "transaksi")}
+              className="rounded-lg border border-fuchsia-400/30 bg-fuchsia-500/10 px-4 py-2 text-sm font-medium text-fuchsia-300 transition-colors hover:bg-fuchsia-500/20"
+            >
+              ⬇ Transaksi
+            </button>
+          </div>
         </div>
 
         <div className="mt-8">

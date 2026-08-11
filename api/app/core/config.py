@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_auth_per_minute: int = 10  # brute-force login/register
     rate_limit_upload_per_minute: int = 30  # abuse upload/batch
+    # FR-14: rate limit API publik B2B per menit per key, berdasarkan tier.
+    api_rate_limit_free_per_minute: int = 20
+    api_rate_limit_pro_per_minute: int = 120
 
     # --- Auth (JWT) ---
     # Secret untuk dev lokal; WAJIB diganti env kuat di produksi.

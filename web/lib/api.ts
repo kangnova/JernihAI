@@ -378,6 +378,50 @@ export async function exportAdminCsv(kind: AdminCsvKind): Promise<Blob> {
   return res.blob();
 }
 
+// --- API Publik B2B (FR-14) ---
+
+export interface B2bApiKey {
+  id: string;
+  name: string;
+  key_prefix: string;
+  tier: "free" | "pro";
+  is_active: boolean;
+  created_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface B2bApiKeyCreated {
+  key: B2bApiKey;
+  full_key: string; // tampil SEKALI saat dibuat
+}
+
+export interface B2bQuota {
+  credit_balance: number;
+  tier: string;
+  rate_limit_per_minute: number;
+}
+
+export async function listApiKeys(): Promise<{ items: B2bApiKey[]; total: number }> {
+  return apiFetch<{ items: B2bApiKey[]; total: number }>("/api/v1/b2b/keys");
+}
+
+export async function createApiKey(input: {
+  name: string;
+  tier: string;
+}): Promise<B2bApiKeyCreated> {
+  return apiFetch<B2bApiKeyCreated>("/api/v1/b2b/keys", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeApiKey(keyId: string): Promise<void> {
+  await apiFetch<{ status: string }>(`/api/v1/b2b/keys/${keyId}`, {
+    method: "DELETE",
+  });
+}
+
 // --- Billing & kredit (FR-11 — Midtrans) ---
 
 export interface BillingPackage {

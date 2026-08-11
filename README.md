@@ -55,6 +55,14 @@ Monorepo platform web untuk peningkatan kualitas foto/gambar (super-resolution, 
 - **Alur**: halaman `/billing` → pilih paket → modal **Midtrans Snap** (QRIS · e-wallet · Virtual Account) → webhook `POST /api/v1/billing/webhook` (signature SHA512 diverifikasi, **idempotent** per `order_id`) → kredit masuk ke saldo.
 - **Mode MOCK (dev)**: tanpa `MIDTRANS_SERVER_KEY`/`MIDTRANS_CLIENT_KEY`, checkout menghasilkan token Snap mock (sandbox tetap bisa diisi key dari dashboard.sandbox.midtrans.com).
 
+## API Publik B2B (FR-14)
+
+- Developer membuat **API key** di halaman `/api-keys` (link **API** di dashboard); key asli ditampilkan **sekali** — yang disimpan hanya hash SHA-256 + prefix.
+- Panggil endpoint dengan header `X-API-Key`; **1 job = 1 kredit** (pay-per-call, dari saldo pemilik key; habis → `402`).
+- Endpoint: `POST /api/v1/b2b/jobs` (upload + mulai proses) · `GET /api/v1/b2b/jobs/{id}` (status) · `GET /api/v1/b2b/jobs/{id}/result` (unduh hasil) · `GET /api/v1/b2b/quota` (sisa kredit + tier).
+- **Rate limit per menit per key** berdasarkan tier (env `API_RATE_LIMIT_FREE_PER_MINUTE` default 20 / `API_RATE_LIMIT_PRO_PER_MINUTE` default 120).
+- Job B2B yang gagal **di-refund otomatis 1 kredit** (sama dengan alur kredit FR-11); job tercatat di riwayat pemilik.
+
 ## Migrasi Database (ADR-011)
 
 - Skema dikelola **Alembic** (`api/migrations/`). Saat menambah kolom/tabel,

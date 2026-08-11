@@ -47,6 +47,13 @@ export default function DashboardPage() {
           >
             Akun
           </Link>
+          {/* FR-14: API publik B2B — kelola API key developer */}
+          <Link
+            href="/api-keys"
+            className="rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-slate-300 transition-colors hover:bg-white/10"
+          >
+            API
+          </Link>
           {/* FR-11: top-up kredit berbayar (Midtrans Snap) */}
           <Link
             href="/billing"

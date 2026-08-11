@@ -38,6 +38,8 @@ JOB_COLS = {
     "admin_notes",
 }
 TXN_COLS = {"order_id", "credits", "amount_idr", "status", "paid_at"}
+# Migrasi 0003 (FR-14): tabel API publik B2B — hanya hash + prefix key.
+API_KEY_COLS = {"user_id", "key_hash", "key_prefix", "tier", "is_active"}
 
 
 def _alembic_config(sqlite_url: str) -> Config:
@@ -73,11 +75,12 @@ def test_upgrade_head_creates_full_schema(tmp_path):
     command.upgrade(_alembic_config(f"sqlite+aiosqlite:///{db}"), "head")
 
     tables = _table_names(db)
-    assert {"users", "jobs", "transactions"} <= tables
+    assert {"users", "jobs", "transactions", "api_keys"} <= tables
 
     assert _columns(db, "users") >= USER_COLS
     assert _columns(db, "jobs") >= JOB_COLS
     assert _columns(db, "transactions") >= TXN_COLS
+    assert _columns(db, "api_keys") >= API_KEY_COLS
 
 
 def test_upgrade_is_idempotent(tmp_path):

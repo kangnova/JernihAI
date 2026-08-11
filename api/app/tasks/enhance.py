@@ -215,19 +215,28 @@ def _resolve_backend(denoise: bool = False) -> str:
 
 
 def _effective_outscale(job: Job) -> int:
-    """Scale efektif dengan batas output maks (ADR-004: 7680×4320).
+    """Scale efektif dengan batas output maks (ADR-004).
 
-    Request scale bisa menghasilkan output > batas (mis. input 4K × 4x).
-    Kembalikan scale terbesar yang tetap memenuhi batas sisi terpanjang.
+    Batas berbeda per format: `png` (lossless, file besar) memakai
+    `png_max_output_longest` (4096 px), format lain 7680 px. Request scale
+    bisa menghasilkan output > batas (mis. input 4K × 4x); kembalikan scale
+    terbesar yang tetap memenuhi batas sisi terpanjang.
 
     Catatan: bila INPUT sudah melebihi batas, outscale = 1 (tanpa upscale)
-    — input tidak diperkecil diam-diam; hasil = ukuran input.
+    — input tidak diperkecil diam-diam; hasil = ukuran input. Untuk PNG,
+    jalur request sudah menolak input > batas (lihat jobs._validate_png_output),
+    jadi kasus ini praktis tidak terjadi untuk job baru.
     """
+    cap = (
+        settings.png_max_output_longest
+        if job.output_format == "png"
+        else settings.max_output_longest
+    )
     with Image.open(job.original_path) as opened:
         longest = max(opened.size)
-    if longest * job.scale <= settings.max_output_longest:
+    if longest * job.scale <= cap:
         return job.scale
-    return max(1, settings.max_output_longest // longest)
+    return max(1, cap // longest)
 
 
 async def process_job(

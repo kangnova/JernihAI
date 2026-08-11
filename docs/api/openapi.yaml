@@ -904,7 +904,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/JobOut'
         '400':
-          description: Parameter `scale`/`output_format` tidak dikenal
+          description: '`scale`/`output_format` tidak dikenal, atau PNG melebihi batas
+            4096 px sisi terpanjang (ADR-004)'
           content:
             application/json:
               schema:
@@ -1657,7 +1658,7 @@ components:
           type: string
           title: Output Format
           description: 'Format hasil: `webp` (default, terbaik), `jpeg`, atau `png`
-            (lossless — ukuran file bisa jauh lebih besar).'
+            (lossless — dibatasi ≤ 4096 px sisi terpanjang, ADR-004).'
           default: webp
           examples:
           - webp

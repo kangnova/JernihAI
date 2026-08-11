@@ -29,6 +29,7 @@ from app.api.routes.jobs import (
     _enqueue,
     _read_and_validate,
     _validate_options,
+    _validate_png_output,
 )
 from app.core.apikey import generate_api_key
 from app.core.config import settings
@@ -214,7 +215,8 @@ async def _get_owned_key(db: AsyncSession, key_id: str, user: User) -> ApiKey:
     responses={
         **_err(
             400,
-            "Parameter `scale`/`output_format` tidak dikenal",
+            "`scale`/`output_format` tidak dikenal, atau PNG melebihi batas "
+            "4096 px sisi terpanjang (ADR-004)",
             "scale harus salah satu dari [2, 4]",
         ),
         **_err(
@@ -257,7 +259,7 @@ async def b2b_create_job(
         "webp",
         description=(
             "Format hasil: `webp` (default, terbaik), `jpeg`, atau `png` "
-            "(lossless — ukuran file bisa jauh lebih besar)."
+            "(lossless — dibatasi ≤ 4096 px sisi terpanjang, ADR-004)."
         ),
         examples=["webp", "jpeg", "png"],
     ),
@@ -298,6 +300,9 @@ async def b2b_create_job(
         )
 
     data, ext = await _read_and_validate(file)
+    # ADR-004: PNG lossless dibatasi 4096 px — cek SEBELUM kredit dipotong
+    # (user tidak membayar untuk job yang pasti gagal).
+    _validate_png_output(data, output_format)
     job_id = str(uuid4())
     original_path = save_upload(data=data, job_id=job_id, ext=ext)
     job = _build_job(

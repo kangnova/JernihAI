@@ -80,7 +80,7 @@ Multipart form. **Biaya: 1 kredit** (dipotong atomik saat request sukses).
 |---|---|---|---|
 | `file` | binary | — | JPG/PNG/WebP, maks **10 MB** (validasi konten, bukan ekstensi) |
 | `scale` | int | `2` | Faktor pembesaran: `2` atau `4` |
-| `output_format` | str | `webp` | `webp` (default, terbaik) · `jpeg` · `png` (lossless — ukuran file bisa jauh lebih besar) |
+| `output_format` | str | `webp` | `webp` (default, terbaik) · `jpeg` · `png` (lossless — **dibatasi ≤ 4096 px** sisi terpanjang, ADR-004) |
 | `face_enhance` | bool | `false` | Restorasi wajah (GFPGAN) |
 | `denoise` | bool | `false` | Kurangi noise |
 | `color_enhance` | bool | `false` | Pertegas warna |
@@ -280,7 +280,9 @@ ke saldo; cek field `error` untuk penyebab (format, file korup, dll.).
 
 **Bisa proses 4x gambar besar?** Ya — worker menangani tiling + FP16 dan
 membatasi output maks 7680×4320 (ADR-004). Hasil default WebP q90 (kecil &
-tajam); pilih `png` hanya bila butuh lossless (file jauh lebih besar).
+tajam). **PNG lossless dibatasi ≤ 4096 px** sisi terpanjang: input lebih
+besar ditolak `400` sebelum kredit dipakai — pilih `webp`/`jpeg` untuk
+ukuran lebih besar.
 
 **Berapa lama proses?** End-to-end biasanya < 60 detik tergantung ukuran
 input & antrean (KPI NFR-01: 4x 1080p < 15 dtk saat worker warm).

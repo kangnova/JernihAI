@@ -204,6 +204,30 @@ async def test_b2b_no_credit_402(db, client, monkeypatch):
     assert resp.status_code == 402
 
 
+async def test_b2b_png_oversize_rejected_credit_untouched(db, client, monkeypatch):
+    """ADR-004: PNG > 4096 px ditolak 400 via B2B — kredit TIDAK terpotong."""
+    await _register(client)
+    await _set_credit(client, "dev@example.com", 5, db)
+    full_key = await _create_key(client)
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4097, 1), (10, 20, 30)).save(buf, format="PNG")
+
+    resp = await client.post(
+        "/api/v1/b2b/jobs",
+        headers={"X-API-Key": full_key},
+        files={"file": ("huge.png", buf.getvalue(), "image/png")},
+        data={"scale": "2", "output_format": "png"},
+    )
+    assert resp.status_code == 400
+    assert "4096" in resp.json()["detail"]
+
+    # Saldo utuh — penolakan terjadi SEBELUM potongan kredit.
+    resp = await client.get("/api/v1/b2b/quota", headers={"X-API-Key": full_key})
+    assert resp.status_code == 200
+    assert resp.json()["credit_balance"] == 5
+
+
 async def test_b2b_failed_job_refunds_credit(db, client, monkeypatch):
     """Job B2B yang gagal -> 1 kredit di-refund otomatis ke saldo pemilik.
 

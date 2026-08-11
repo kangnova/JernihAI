@@ -1,11 +1,13 @@
 """Endpoint jobs — FR-02 upload, FR-03 status (polling), FR-05 download,
 FR-10 riwayat (list)."""
 
+import io
 import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
+from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,6 +69,36 @@ async def _read_and_validate(file: UploadFile) -> tuple[bytes, str]:
             detail="Hanya menerima JPG, PNG, atau WebP (validasi konten, bukan ekstensi)",
         )
     return data, ext
+
+
+def _validate_png_output(data: bytes, output_format: str) -> None:
+    """ADR-004: PNG lossless dibatasi `png_max_output_longest` px (sisi terpanjang).
+
+    Input yang lebih besar TIDAK diperkecil diam-diam — ditolak 400 SEBELUM
+    slot/kredit dipakai (user tidak membayar untuk job yang pasti gagal);
+    pilih `webp`/`jpeg` untuk ukuran lebih besar. Format lain tidak terpengaruh.
+    Batas ini juga di-enforce di pipeline (`enhance._effective_outscale`),
+    jadi hasil PNG tidak pernah melebihi batas lewat upscaling.
+    """
+    if output_format != "png":
+        return
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            longest = max(img.size)
+    except Exception:  # noqa: BLE001 — file valid magic tapi tak terbaca header
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="File gambar tidak dapat dibaca (mungkin korup)",
+        ) from None
+    if longest > settings.png_max_output_longest:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"PNG lossless dibatasi maks {settings.png_max_output_longest} px "
+                f"(sisi terpanjang) — gambar ini {longest} px. Pilih format "
+                "webp/jpeg untuk ukuran lebih besar."
+            ),
+        )
 
 
 def _build_job(
@@ -142,6 +174,8 @@ async def create_job(
         )
 
     data, ext = await _read_and_validate(file)
+    # ADR-004: PNG lossless dibatasi 4096 px — cek SEBELUM slot dipakai.
+    _validate_png_output(data, output_format)
     job_id = str(uuid4())
     original_path = save_upload(data=data, job_id=job_id, ext=ext)
     job = _build_job(
@@ -210,6 +244,9 @@ async def create_batch_jobs(
     staged: list[tuple[bytes, str, str]] = []
     for f in files:
         data, ext = await _read_and_validate(f)
+        # ADR-004: PNG lossless dibatasi 4096 px — validasi tetap ATOMIK
+        # (semua file sebelum simpan/konsumsi slot).
+        _validate_png_output(data, output_format)
         staged.append((data, ext, f.filename or "gambar"))
 
     # Fase 2: simpan semua + insert job + konsumsi slot (satu transaksi).

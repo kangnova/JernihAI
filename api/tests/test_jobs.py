@@ -281,6 +281,80 @@ async def test_upload_rejects_invalid_output_format(client):
     assert resp.status_code == 400
 
 
+# --- ADR-004: batas PNG lossless (≤ 4096 px sisi terpanjang) ---
+
+
+def _wide_png_bytes(longest: int) -> bytes:
+    """PNG hemat memori dengan sisi terpanjang tertentu (1 px tinggi)."""
+    buf = io.BytesIO()
+    Image.new("RGB", (longest, 1), (10, 20, 30)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+async def test_upload_png_oversize_rejected_400_quota_untouched(client):
+    """ADR-004: PNG > 4096 px ditolak 400; kuota tidak terpotong, tanpa job."""
+    await _register(client)
+    resp = await client.post(
+        "/api/v1/jobs",
+        files={"file": ("huge.png", _wide_png_bytes(4097), "image/png")},
+        data={"scale": "2", "output_format": "png"},
+    )
+    assert resp.status_code == 400
+    assert "4096" in resp.json()["detail"]
+
+    # Tidak ada job dibuat & kuota gratis utuh (cek terjadi SEBELUM konsumsi).
+    assert (await client.get("/api/v1/jobs")).json() == {"items": [], "total": 0}
+    assert (await client.get("/api/v1/quota")).json()["remaining"] == 3
+
+
+async def test_upload_png_at_boundary_allowed(client):
+    """ADR-004: PNG tepat 4096 px (sisi terpanjang) masih diterima."""
+    await _register(client)
+    resp = await client.post(
+        "/api/v1/jobs",
+        files={"file": ("ok.png", _wide_png_bytes(4096), "image/png")},
+        data={"scale": "2", "output_format": "png"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["status"] == JobStatus.COMPLETED.value
+
+
+async def test_upload_png_scale_capped_to_4096(client):
+    """ADR-004: input ≤ 4096 dengan scale 4 diterima; upscale di-cap ke 4096.
+
+    Input 2000px × 4 = 8000 > 4096 → outscale efektif 4096 // 2000 = 2 →
+    output 4000px (bukan 8000px). Perilaku yang dijanjikan dokumentasi
+    "dibatasi ≤ 4096 px" berlaku di jalur request + pipeline.
+    """
+    await _register(client)
+    resp = await client.post(
+        "/api/v1/jobs",
+        files={"file": ("med.png", _wide_png_bytes(2000), "image/png")},
+        data={"scale": "4", "output_format": "png"},
+    )
+    assert resp.status_code == 201, resp.text
+    job = resp.json()
+    assert job["status"] == JobStatus.COMPLETED.value
+
+    # Verifikasi dimensi hasil benar-benar ter-cap (bukan 8000 px).
+    dl = await client.get(f"/api/v1/jobs/{job['id']}/download")
+    assert dl.status_code == 200
+    with Image.open(io.BytesIO(dl.content)) as out:
+        assert max(out.size) <= 4096
+
+
+async def test_upload_large_image_ok_for_webp(client):
+    """ADR-004: input besar tetap boleh untuk format webp/jpeg (bukan PNG)."""
+    await _register(client)
+    resp = await client.post(
+        "/api/v1/jobs",
+        files={"file": ("huge.png", _wide_png_bytes(4097), "image/png")},
+        data={"scale": "2", "output_format": "webp"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["status"] == JobStatus.COMPLETED.value
+
+
 async def test_list_jobs_requires_auth(client):
     resp = await client.get("/api/v1/jobs")
     assert resp.status_code == 401
@@ -482,6 +556,33 @@ def test_effective_outscale_unaffected_within_limit(monkeypatch, tmp_path):
         original_path=str(src),
     )
     assert enhance_module._effective_outscale(job) == 4
+
+
+def test_effective_outscale_png_uses_png_cap(monkeypatch, tmp_path):
+    """ADR-004: batas PNG (4096) lebih ketat dari format lain (7680)."""
+    src = tmp_path / "med.png"
+    Image.new("RGB", (3000, 100)).save(src)
+    base = dict(
+        user_id="u",
+        status=JobStatus.QUEUED.value,
+        scale=4,
+        original_name="med.png",
+        original_path=str(src),
+    )
+    # 3000 * 4 = 12000 — melebihi 4096 (png) maupun 7680 (webp).
+    job_png = Job(id="png-cap", output_format="png", **base)
+    job_webp = Job(id="webp-cap", output_format="webp", **base)
+    assert enhance_module._effective_outscale(job_png) == 1  # 4096 // 3000
+    assert enhance_module._effective_outscale(job_webp) == 2  # 7680 // 3000
+
+    # PNG yang muat di 4096 tetap tidak dikurangi (input 1000 × 2 = 2000).
+    src2 = tmp_path / "fit.png"
+    Image.new("RGB", (1000, 100)).save(src2)
+    job_fit = Job(
+        id="png-fit", user_id="u", status=JobStatus.QUEUED.value, scale=2,
+        output_format="png", original_name="fit.png", original_path=str(src2),
+    )
+    assert enhance_module._effective_outscale(job_fit) == 2
 
 
 async def test_backend_real_fails_loudly_when_model_missing(client, db, monkeypatch):

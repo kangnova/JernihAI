@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     half_precision: bool = True
     # Batas output sisi terpanjang (ADR-004: maks 7680×4320).
     max_output_longest: int = 7680
+    # ADR-004: PNG lossless dibatasi 4096 px sisi terpanjang (8K PNG = 20+ MB,
+    # tidak didukung default). Di-enforce di request (jobs/b2b -> 400) dan di
+    # pipeline (_effective_outscale memakai batas ini untuk format png).
+    png_max_output_longest: int = 4096
 
 
 settings = Settings()

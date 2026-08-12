@@ -8,6 +8,28 @@ info:
     OpenAPI lengkap: `docs/api/openapi.yaml` (regenerate via `python api/scripts/export_openapi.py`).'
   version: 0.1.0
 paths:
+  /api/v1/health/metrics:
+    get:
+      tags:
+      - health
+      summary: Metrik operasional untuk pemantauan & autoscale (NFR-08)
+      description: "Metrik ringan untuk keputusan operasional (dipakai `queue_monitor.py`):\n\
+        \n- `queue.length` — antrean Celery dari Redis (LLEN): menumpuk terus =\n\
+        \  tambah worker (autoscale up); nyaris nol = kapasitas berlebih.\n- `jobs.*`\
+        \ — snapshot jumlah job per status.\n- `throughput.*` — laju selesai/gagal\
+        \ 1 & 24 jam + failure rate.\n- `latency.*` — rata-rata durasi proses (KPI\
+        \ NFR-01 end-to-end).\n- `config.*` — konteks (storage/rate limit/enhance\
+        \ backend, environment).\n\nTanpa autentikasi (seperti /health) — di produksi\
+        \ batasi aksesnya di\ngateway/firewall; endpoint ini tetap 200 walau Redis\
+        \ tidak terjangkau."
+      operationId: metrics_api_v1_health_metrics_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
   /api/v1/health:
     get:
       tags:
@@ -136,15 +158,13 @@ paths:
       summary: Mulai login Google (redirect ke Google)
       operationId: google_login_api_v1_auth_google_get
       responses:
-        '200':
-          description: Successful Response
+        '302':
+          description: Redirect ke Google OAuth consent
           content:
             application/json:
-              schema:
-                additionalProperties:
-                  type: string
-                type: object
-                title: Response Google Login Api V1 Auth Google Get
+              schema: {}
+        '503':
+          description: Google login belum dikonfigurasi (GOOGLE_CLIENT_ID kosong)
   /api/v1/auth/google/callback:
     get:
       tags:
@@ -154,16 +174,44 @@ paths:
       parameters:
       - name: code
         in: query
-        required: true
+        required: false
         schema:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
           title: Code
+      - name: error
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+      - name: state
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: State
       responses:
         '200':
           description: Successful Response
           content:
             application/json:
               schema: {}
+        '303':
+          description: Redirect ke web setelah login sukses
+        '400':
+          description: State OAuth tidak valid / email tidak tersedia
+        '401':
+          description: Gagal menukar kode Google
+        '403':
+          description: Akun dinonaktifkan
+        '503':
+          description: Google login belum dikonfigurasi
         '422':
           description: Validation Error
           content:
@@ -734,14 +782,14 @@ paths:
       tags:
       - admin
       summary: Hapus job + file-nya (alat admin)
-      description: 'Hapus permanen job (baris DB + file original & hasil di disk).
+      description: 'Hapus permanen job (baris DB + file original & hasil di storage).
 
 
         File hanya dihapus bila berada di dalam upload_dir/result_dir (guard
 
-        path traversal via `delete_if_inside`). Dipakai pengelola membersihkan
+        path traversal via `delete_if_inside`; berlaku untuk backend lokal
 
-        data uji coba.'
+        maupun R2). Dipakai pengelola membersihkan data uji coba.'
       operationId: admin_delete_job_api_v1_admin_jobs__job_id__delete
       parameters:
       - name: job_id
@@ -1801,6 +1849,28 @@ components:
       required:
       - package_slug
       title: CheckoutRequest
+    ConfigInfo:
+      properties:
+        environment:
+          type: string
+          title: Environment
+        storage_backend:
+          type: string
+          title: Storage Backend
+        rate_limit_backend:
+          type: string
+          title: Rate Limit Backend
+        enhance_backend:
+          type: string
+          title: Enhance Backend
+      type: object
+      required:
+      - environment
+      - storage_backend
+      - rate_limit_backend
+      - enhance_backend
+      title: ConfigInfo
+      description: Info konfigurasi penting untuk konteks metrik (ops).
     ErrorResponse:
       properties:
         detail:
@@ -1848,6 +1918,28 @@ components:
       - version
       - environment
       title: HealthResponse
+    JobCounts:
+      properties:
+        queued:
+          type: integer
+          title: Queued
+        processing:
+          type: integer
+          title: Processing
+        completed:
+          type: integer
+          title: Completed
+        failed:
+          type: integer
+          title: Failed
+      type: object
+      required:
+      - queued
+      - processing
+      - completed
+      - failed
+      title: JobCounts
+      description: Snapshot jumlah job per status saat ini.
     JobListOut:
       properties:
         items:
@@ -1925,6 +2017,21 @@ components:
       - created_at
       - finished_at
       title: JobOut
+    LatencyMetric:
+      properties:
+        avg_processing_seconds_24h:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Avg Processing Seconds 24H
+        samples:
+          type: integer
+          title: Samples
+      type: object
+      required:
+      - samples
+      title: LatencyMetric
+      description: Durasi proses rata-rata dari job `completed` 24 jam terakhir.
     LoginRequest:
       properties:
         email:
@@ -1939,6 +2046,39 @@ components:
       - email
       - password
       title: LoginRequest
+    MetricsResponse:
+      properties:
+        service:
+          type: string
+          title: Service
+        version:
+          type: string
+          title: Version
+        generated_at:
+          type: string
+          format: date-time
+          title: Generated At
+        queue:
+          $ref: '#/components/schemas/QueueMetric'
+        jobs:
+          $ref: '#/components/schemas/JobCounts'
+        throughput:
+          $ref: '#/components/schemas/ThroughputMetric'
+        latency:
+          $ref: '#/components/schemas/LatencyMetric'
+        config:
+          $ref: '#/components/schemas/ConfigInfo'
+      type: object
+      required:
+      - service
+      - version
+      - generated_at
+      - queue
+      - jobs
+      - throughput
+      - latency
+      - config
+      title: MetricsResponse
     PackageOut:
       properties:
         slug:
@@ -1971,6 +2111,33 @@ components:
       - credit_balance
       - packages
       title: PackagesOut
+    QueueMetric:
+      properties:
+        status:
+          type: string
+          title: Status
+        length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Length
+        detail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Detail
+      type: object
+      required:
+      - status
+      title: QueueMetric
+      description: 'Panjang antrean Celery dari Redis (LLEN) — sinyal autoscale.
+
+
+        `status`: "ok" (length terisi) | "skipped" (mode eager tanpa broker) |
+
+        "error" (Redis tidak terjangkau — endpoint tetap 200, pemantau yang
+
+        menilai).'
     QuotaOut:
       properties:
         limit:
@@ -2056,6 +2223,34 @@ components:
       - password
       - name
       title: RegisterRequest
+    ThroughputMetric:
+      properties:
+        completed_1h:
+          type: integer
+          title: Completed 1H
+        completed_24h:
+          type: integer
+          title: Completed 24H
+        failed_24h:
+          type: integer
+          title: Failed 24H
+        failure_rate_24h:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Failure Rate 24H
+      type: object
+      required:
+      - completed_1h
+      - completed_24h
+      - failed_24h
+      title: ThroughputMetric
+      description: 'Laju job pada jendela waktu (anchor `updated_at` = transisi terakhir).
+
+
+        `failure_rate_24h` = failed / (failed + completed) pada 24 jam terakhir;
+
+        None bila tidak ada job selesai dalam jendela (data tidak cukup).'
     TransactionOut:
       properties:
         id:

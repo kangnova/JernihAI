@@ -23,6 +23,10 @@ dependencies = [
     "pillow>=11.0.0",
     # Migrasi skema DB (ADR-011) — dipakai runtime produksi & dev.
     "alembic>=1.13.0",
+    # Cloudflare R2 (Fase 3 — storage produksi & multi-node). Dipasang di
+    # image CPU & GPU; di-import lazy hanya saat STORAGE_BACKEND=r2
+    # (lihat app/core/storage.py).
+    "boto3>=1.35.0",
 ]
 
 [project.optional-dependencies]

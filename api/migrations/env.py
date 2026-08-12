@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app import models  # noqa: F401 — daftarkan SEMUA model ke metadata
 from app.core.config import settings
 from app.models.base import Base
+from migrations.lock import acquire as acquire_migration_lock
+from migrations.lock import release as release_migration_lock
 
 config = context.config
 
@@ -60,7 +62,15 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
     )
     async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+        # Fase 3 (multi-instance): serialisasi `upgrade head` antar replica
+        # (migrations/lock.py). Lock session-level di-commit agar migrasi
+        # mulai dari transaksi bersih; lock bertahan sampai release.
+        await acquire_migration_lock(connection)
+        await connection.commit()
+        try:
+            await connection.run_sync(do_run_migrations)
+        finally:
+            await release_migration_lock(connection)
     await connectable.dispose()
 
 

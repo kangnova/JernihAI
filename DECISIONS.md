@@ -127,6 +127,19 @@ Format: ADR ringan. Status: `proposed` (belum dieksekusi) / `accepted` / `supers
   - **Web**: halaman `/billing` (saldo, paket, modal Snap via `snap.pay(token)`, riwayat transaksi), badge kredit + tombol "Beli kredit" di dashboard, tombol upload hanya blok saat `total_slots == 0` (kuota gratis + kredit).
 - **Konsekuensi:** butuh `MIDTRANS_SERVER_KEY`/`MIDTRANS_CLIENT_KEY` di env (kosong = mode MOCK dev); webhook perlu di-expose ke internet (Midtrans dashboard) di produksi; kolom/tabel baru (users/jobs/transactions) ditangani Alembic — lihat ADR-011 (tanpa `down -v`); refund kredit hanya menambah saldo (tidak ada refund uang — model kredit, bukan langganan).
 
+## ADR-012: Multi-Instance Job Safety (Fase 3 — NFR-02 autoscale)
+
+- **Status:** `accepted` — Fase 3.
+- **Konteks:** Fase 3 menaikkan JernihAI ke >1 instance (replica API + beberapa worker GPU, NFR-02 target 100 job simultan). Tanpa pengaman, tiga race muncul: (1) **redelivery** — `acks_late` + `task_reject_on_worker_lost` mengirim ulang task saat worker crash → dua worker memproses job SAMA (double-process, refund ganda); (2) **race stale-check vs worker** — stale-check menandai job `failed` + refund saat worker masih memproses → worker menimpa jadi `completed` (user dapat hasil + refund = double-benefit); (3) **konsumsi slot** — cek lalu kurangi kuota/kredit non-atomik → dua request konkuren dari user sama bisa over-spend.
+- **Keputusan:**
+  - **Klaim job ATOMIK** (`_claim_job` di app/tasks/enhance.py): transisi `queued→processing` (atau `failed→processing` saat retry) via `UPDATE ... WHERE status=...` — hanya SATU worker yang menang (rowcount 1); yang kalah return None ("skipped", tanpa proses & refund).
+  - **Guard selesai/gagal** (`_complete_job`/`_fail_job`): menulis `completed`/`failed` HANYA bila job masih `processing` — stale-check yang menang race tidak ditimpa (pesan + refund dipertahankan; hasil yatim dihapus lokal, di bucket ditutup lifecycle R2); redelivery tidak memicu refund kedua.
+  - **Konsumsi slot terkunci** (jobs.py `_lock_current_user`): `SELECT ... FOR UPDATE` + `populate_existing` pada baris user sebelum cek slot — cek + konsumsi + commit dalam satu transaksi (SQLite test mengabaikan FOR UPDATE; perilaku serial tetap benar).
+  - **Migrasi aman antar replica**: advisory lock PostgreSQL (`pg_advisory_lock`) di migrations/env.py — dua `api` yang start bersamaan tidak menabrak saat `alembic upgrade head`.
+  - **Celery**: `broker_connection_retry_on_startup=True` (worker tidak crash-loop saat Redis restart).
+  - **Batas scale**: `beat` TETAP 1 instance (jadwal retensi/stale-check dobel = bahaya); worker GPU tetap pool `solo` (CUDA, ADR-001).
+- **Konsekuensi:** `process_job` kini mengembalikan None untuk job yang tidak dapat diklaim (perilaku baru yang disengaja); `finished_at` tetap hanya di jalur sukses (kontrak test dipertahankan — job gagal tanpa `finished_at`). Panduan operasional: docs/GUIDE_SCALE.md.
+
 ## ADR-011: Migrasi Skema via Alembic (pengganti create_all runtime)
 
 - **Status:** `accepted` — Fase 2.

@@ -32,9 +32,15 @@ services:
     build: ./api
     # ADR-011: migrasi skema (Alembic) dijalankan OTOMATIS sebelum api start —
     # deploy ke VPS tidak perlu `docker compose down -v` saat kolom baru.
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    # --proxy-headers: percaya X-Forwarded-For dari nginx gateway (infra/nginx)
+    # sehingga rate limit per-IP akurat; produksi JANGAN ekspos port 8000
+    # langsung ke publik (bisa spoof header) — lihat docs/DEPLOY_PRODUKSI.md §8.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --reload"
     environment:
-      ENVIRONMENT: development
+      # Semua nilai di-override dari .env root (lihat docs/DEPLOY_PRODUKSI.md
+      # §3). ENVIRONMENT=production + JWT_SECRET lemah/dev + COOKIE_SECURE=false
+      # MEMBLOKIR start api (fail-fast, app/core/config.py) — jangan hapus.
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-jernihai}:${POSTGRES_PASSWORD:-jernihai}@db:5432/${POSTGRES_DB:-jernihai}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
@@ -43,12 +49,29 @@ services:
       # (dev: eager=true) ikut terbaca container — env compose menang atas
       # file .env, jadi mode produksi tidak pernah diam-diam jadi eager.
       CELERY_TASK_ALWAYS_EAGER: "false"
-      CORS_ORIGINS: '["http://localhost:3000"]'
-      JWT_SECRET: ${JWT_SECRET:-dev-secret-ganti-di-produksi-0123456789abcdef}
-      WEB_URL: http://localhost:3000
-      COOKIE_SECURE: "false"
+      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:3000"]}'
+      # Produksi WAJIB override: JWT_SECRET acak >= 32 byte, ENVIRONMENT=production,
+      # COOKIE_SECURE=true, CORS_ORIGINS/WEB_URL ke domain asli — kalau tidak,
+      # validator app/core/config.py memblokir start (fail-fast).
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jangan-pakai-di-produksi-0123456789abcdef0123456789abcdef}
+      WEB_URL: ${WEB_URL:-http://localhost:3000}
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
       # FR-13: email admin (list JSON) — contoh: '["admin@example.com"]'
       ADMIN_EMAILS: ${ADMIN_EMAILS:-[]}
+      # FR-01: Google OAuth — kosongkan untuk nonaktif (HTTP 503).
+      # Cara buat client ID/secret: docs/GUIDE_GOOGLE_OAUTH.md
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Fase 3 — storage Cloudflare R2 (default local untuk dev).
+      # Panduan setup: docs/GUIDE_R2.md
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      # NFR-04: rate limit "memory" (per proses) atau "redis" (state
+      # dibagi antar instance — produksi multi-node).
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET: ${R2_BUCKET:-jernihai}
       # FR-11: Midtrans Snap — kosongkan untuk mode MOCK (dev).
       MIDTRANS_SERVER_KEY: ${MIDTRANS_SERVER_KEY:-}
       MIDTRANS_CLIENT_KEY: ${MIDTRANS_CLIENT_KEY:-}
@@ -73,6 +96,14 @@ services:
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       # Sama seperti api: non-eager eksplisit (lihat komentar di service api).
       CELERY_TASK_ALWAYS_EAGER: "false"
+      # Fase 3 — storage R2 (sama dengan api): worker membaca original &
+      # menulis hasil dari/ke bucket bila STORAGE_BACKEND=r2.
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-memory}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET: ${R2_BUCKET:-jernihai}
     volumes:
       - ./api:/app
     depends_on:
@@ -112,13 +143,27 @@ services:
     profiles: ["gpu"]
     command: celery -A app.tasks.worker.celery_app worker --loglevel=info --pool=solo
     environment:
-      ENVIRONMENT: production
+      # Default development agar smoke test GPU (Opsi B DEPLOY_VAST.md)
+      # tetap jalan tanpa env tambahan. Produksi: set ENVIRONMENT=production
+      # + JWT_SECRET kuat + COOKIE_SECURE=true di .env root — validator
+      # fail-fast menolak start worker bila konfigurasi tidak aman.
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       ENHANCE_BACKEND: real
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-jernihai}:${POSTGRES_PASSWORD:-jernihai}@db:5432/${POSTGRES_DB:-jernihai}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       CELERY_TASK_ALWAYS_EAGER: "false"
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jangan-pakai-di-produksi-0123456789abcdef0123456789abcdef}
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      # Fase 3 — storage R2: worker GPU Vast.ai TIDAK berbagi disk dengan
+      # api; dengan STORAGE_BACKEND=r2, original diunduh dari bucket &
+      # hasil di-upload balik (multi-node tanpa volume bersama).
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET: ${R2_BUCKET:-jernihai}
     deploy:
       resources:
         reservations:
@@ -136,7 +181,13 @@ services:
     build: ./web
     command: npm run dev
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      # URL API yang DILIHAT BROWSER (bukan dari dalam container). Produksi
+      # WAJIB override ke domain publik, mis. https://jernihai.example.com —
+      # kalau dibiarkan localhost, browser user memanggil localhost-nya sendiri.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      # FR-01: rewrite /api/* di Next.js ke backend (callback OAuth via origin
+      # web). Local dev: export API_REWRITE_TARGET=http://localhost:8000.
+      API_REWRITE_TARGET: ${API_REWRITE_TARGET:-http://api:8000}
       # FR-11: true hanya saat pakai akun Midtrans PRODUKSI (URL script Snap
       # berbeda: app.midtrans.com vs app.sandbox.midtrans.com).
       NEXT_PUBLIC_MIDTRANS_PRODUCTION: ${NEXT_PUBLIC_MIDTRANS_PRODUCTION:-false}

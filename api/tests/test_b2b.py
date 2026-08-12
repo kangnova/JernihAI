@@ -320,7 +320,7 @@ async def test_b2b_rate_limit_per_tier(client, monkeypatch):
     monkeypatch.setattr(settings, "rate_limit_enabled", True)
     monkeypatch.setattr(settings, "api_rate_limit_free_per_minute", 2)
     monkeypatch.setattr(settings, "api_rate_limit_pro_per_minute", 3)
-    rate_limit_reset()
+    await rate_limit_reset()
 
     await _register(client)
     key_free = await _create_key(client, "free-key", "free")
@@ -334,11 +334,11 @@ async def test_b2b_rate_limit_per_tier(client, monkeypatch):
     assert resp.status_code == 429
 
     # Tier pro: limit 3 — 3 request sukses (key berbeda, counter terpisah).
-    rate_limit_reset()
+    await rate_limit_reset()
     for _ in range(3):
         resp = await client.get("/api/v1/b2b/quota", headers={"X-API-Key": key_pro})
         assert resp.status_code == 200
     resp = await client.get("/api/v1/b2b/quota", headers={"X-API-Key": key_pro})
     assert resp.status_code == 429
 
-    rate_limit_reset()
+    await rate_limit_reset()

@@ -444,14 +444,15 @@ async def admin_quota_reset(
     return QuotaResetOut(reset=count, email=None)
 
 
-def _delete_job_files(job: Job) -> int:
-    """Hapus file original & hasil job dari disk (guard path traversal).
-    Mengembalikan jumlah file yang berhasil dihapus.
+async def _delete_job_files(job: Job) -> int:
+    """Hapus file original & hasil job dari storage (guard path traversal).
+    Mengembalikan jumlah file yang berhasil dihapus. Bekerja untuk backend
+    lokal (disk) maupun R2.
     """
     files_deleted = 0
-    if delete_if_inside(job.original_path, settings.upload_dir):
+    if await delete_if_inside(job.original_path, settings.upload_dir):
         files_deleted += 1
-    if delete_if_inside(job.result_path, settings.result_dir):
+    if await delete_if_inside(job.result_path, settings.result_dir):
         files_deleted += 1
     return files_deleted
 
@@ -465,11 +466,11 @@ async def admin_delete_job(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> dict[str, object]:
-    """Hapus permanen job (baris DB + file original & hasil di disk).
+    """Hapus permanen job (baris DB + file original & hasil di storage).
 
     File hanya dihapus bila berada di dalam upload_dir/result_dir (guard
-    path traversal via `delete_if_inside`). Dipakai pengelola membersihkan
-    data uji coba.
+    path traversal via `delete_if_inside`; berlaku untuk backend lokal
+    maupun R2). Dipakai pengelola membersihkan data uji coba.
     """
     job = await db.get(Job, job_id)
     if job is None:
@@ -477,7 +478,7 @@ async def admin_delete_job(
             status_code=status.HTTP_404_NOT_FOUND, detail="Job tidak ditemukan"
         )
 
-    files_deleted = _delete_job_files(job)
+    files_deleted = await _delete_job_files(job)
     await db.delete(job)
     await db.commit()
     return {"deleted": True, "id": job_id, "files_deleted": files_deleted}
@@ -698,7 +699,7 @@ async def admin_delete_user_jobs(
     )
     files_deleted = 0
     for job in jobs:
-        files_deleted += _delete_job_files(job)
+        files_deleted += await _delete_job_files(job)
         await db.delete(job)
     await db.commit()
     return {"deleted": len(jobs), "files_deleted": files_deleted, "user_id": user_id}

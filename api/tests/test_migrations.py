@@ -137,3 +137,48 @@ def test_upgrade_converges_partial_legacy_db_without_losing_data(tmp_path):
     finally:
         engine.dispose()
     assert count == 1
+
+
+# --- Fase 3 (multi-instance): advisory lock migrasi antar replica ---
+
+
+class _FakeAsyncConnection:
+    """Tiruan AsyncConnection: catat perintah yang benar-benar di-await."""
+
+    def __init__(self, dialect_name: str):
+        self.dialect = type("Dialect", (), {"name": dialect_name})()
+        self.executed: list[str] = []
+
+    async def execute(self, stmt, params=None):
+        # Dipanggil HANYA bila helper men-await — coroutine yang dibuang
+        # tidak pernah sampai sini (regresi lock yang tidak jalan).
+        self.executed.append(str(stmt))
+        return None
+
+
+async def test_migration_lock_acquires_and_releases_on_postgres():
+    """Postgres: `pg_advisory_lock`/`unlock` benar-benar dieksekusi (di-await).
+
+    Regresi: implementasi awal memanggil `connection.execute` (async)
+    tanpa await pada AsyncConnection — coroutine dibuang, lock tidak pernah
+    jalan (dua replica bisa menabrak saat `alembic upgrade head`).
+    """
+    from migrations.lock import acquire, release
+
+    conn = _FakeAsyncConnection("postgresql")
+    await acquire(conn)
+    await release(conn)
+
+    assert any("pg_advisory_lock" in s for s in conn.executed)
+    assert any("pg_advisory_unlock" in s for s in conn.executed)
+
+
+async def test_migration_lock_skipped_on_sqlite():
+    """SQLite (test/dev): tidak ada advisory lock — helper no-op."""
+    from migrations.lock import acquire, release
+
+    conn = _FakeAsyncConnection("sqlite")
+    await acquire(conn)
+    await release(conn)
+
+    assert conn.executed == []

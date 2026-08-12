@@ -62,4 +62,12 @@ def set_auth_cookie(response: Response, token: str) -> None:
 
 
 def clear_auth_cookie(response: Response) -> None:
-    response.delete_cookie(key=settings.cookie_name, path="/")
+    # Parameter cookie HARUS sama dengan set_auth_cookie (secure/httponly/
+    # samesite) — browser hanya menghapus cookie bila atribut cocok.
+    response.delete_cookie(
+        key=settings.cookie_name,
+        path="/",
+        secure=settings.cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )

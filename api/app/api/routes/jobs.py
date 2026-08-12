@@ -6,7 +6,7 @@ import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +15,13 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.quota import consume_slots, slots_available
 from app.core.ratelimit import rate_limit_dependency
-from app.core.storage import detect_image_format, resolve, save_upload
+from app.core.storage import (
+    delete_if_inside,
+    detect_image_format,
+    download_url,
+    resolve,
+    save_upload,
+)
 from app.db.session import get_db
 from app.models.job import Job, JobStatus
 from app.models.user import User
@@ -142,6 +148,25 @@ async def _enqueue(job: Job, db: AsyncSession) -> None:
             logger.warning("Gagal mengantre job %s ke broker Redis", job.id, exc_info=True)
 
 
+async def _lock_current_user(db: AsyncSession, current_user: User) -> User:
+    """Kunci baris user untuk transaksi slot (SELECT ... FOR UPDATE).
+
+    Fase 3 (multi-instance, NFR-02): tanpa lock, dua request KONKUREN dari
+    user yang sama bisa sama-sama lolos cek slot lalu over-spend (kuota
+    gratis/kredit jadi negatif). Lock menahan transaksi lain di baris ini
+    sampai commit. `populate_existing=True` memastikan data dibaca SEGAR
+    setelah lock diperoleh (identity map tidak mengembalikan nilai lama).
+    SQLite (test) mengabaikan FOR UPDATE — perilaku serial tetap benar.
+    """
+    result = await db.execute(
+        select(User)
+        .where(User.id == current_user.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return result.scalar_one()
+
+
 @router.post(
     "",
     response_model=JobOut,
@@ -161,6 +186,11 @@ async def create_job(
 ) -> Job:
     _validate_options(scale, output_format)
 
+    # Fase 3 (multi-instance): kunci baris user agar cek + konsumsi slot
+    # ATOMIK dalam satu transaksi (dua request konkuren tidak bisa
+    # sama-sama lolos cek lalu over-spend).
+    current_user = await _lock_current_user(db, current_user)
+
     # FR-06/FR-11: cek slot (kuota gratis + kredit) SEBELUM membaca file —
     # user yang kehabisan tidak perlu mengunggah (hemat bandwidth & disk).
     if slots_available(current_user) <= 0:
@@ -177,7 +207,7 @@ async def create_job(
     # ADR-004: PNG lossless dibatasi 4096 px — cek SEBELUM slot dipakai.
     _validate_png_output(data, output_format)
     job_id = str(uuid4())
-    original_path = save_upload(data=data, job_id=job_id, ext=ext)
+    original_path = await save_upload(data=data, job_id=job_id, ext=ext)
     job = _build_job(
         job_id, current_user, original_path, file.filename or "gambar",
         scale, output_format, face_enhance, denoise, color_enhance,
@@ -190,8 +220,8 @@ async def create_job(
     try:
         await db.commit()
     except Exception:
-        # Hindari file yatim di disk bila insert DB gagal (P5 review).
-        resolve(original_path).unlink(missing_ok=True)
+        # Hindari file yatim di disk/bucket bila insert DB gagal (P5 review).
+        await delete_if_inside(original_path, settings.upload_dir)
         raise
     await db.refresh(job)
 
@@ -229,6 +259,10 @@ async def create_batch_jobs(
         )
     _validate_options(scale, output_format)
 
+    # Fase 3 (multi-instance): kunci baris user — cek + konsumsi total slot
+    # batch ATOMIK dalam satu transaksi (lihat create_job).
+    current_user = await _lock_current_user(db, current_user)
+
     if slots_available(current_user) < len(files):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -257,7 +291,7 @@ async def create_batch_jobs(
         free_used, _ = consume_slots(current_user, len(staged))
         for idx, (data, ext, name) in enumerate(staged):
             job_id = str(uuid4())
-            original_path = save_upload(data=data, job_id=job_id, ext=ext)
+            original_path = await save_upload(data=data, job_id=job_id, ext=ext)
             saved.append(original_path)
             job = _build_job(
                 job_id, current_user, original_path, name,
@@ -271,7 +305,7 @@ async def create_batch_jobs(
         # Rollback transaksi + hapus file yatim bila commit gagal.
         await db.rollback()
         for path in saved:
-            resolve(path).unlink(missing_ok=True)
+            await delete_if_inside(path, settings.upload_dir)
         raise
 
     # Fase 3: antrekan semua job (eager inline di dev/test).
@@ -343,12 +377,13 @@ async def get_job(
 @router.get(
     "/{job_id}/download",
     summary="Unduh hasil proses (FR-05)",
+    response_model=None,  # respons biner FileResponse / 302 — bukan JSON
 )
 async def download_result(
     job_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> FileResponse:
+) -> FileResponse | RedirectResponse:
     job = await _get_owned_job(db, job_id, current_user)
     if job.result_deleted_at is not None:
         # FR-07: hasil sudah dihapus oleh retensi (7 hari) — jawab 410 Gone.
@@ -361,13 +396,18 @@ async def download_result(
             status_code=status.HTTP_409_CONFLICT,
             detail="Hasil belum siap (status: " + (job.status or "?") + ")",
         )
+    filename = f"{job.id}-{job.scale}x.{job.output_format}"
+    # R2: jawab 302 ke presigned URL (egress gratis, tidak lewat api).
+    # Local: None → pakai FileResponse dari disk.
+    url = await download_url(job.result_path, filename)
+    if url:
+        return RedirectResponse(url)
     path = resolve(job.result_path)
     if not path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File hasil tidak ditemukan (mungkin sudah terhapus oleh retensi)",
         )
-    filename = f"{job.id}-{job.scale}x.{job.output_format}"
     return FileResponse(
         path,
         media_type=CONTENT_TYPES[job.output_format],

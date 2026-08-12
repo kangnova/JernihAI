@@ -4,6 +4,7 @@ Alur token: JWT ditaruh di httpOnly cookie (ADR-003). Login sukses
 mengatur cookie di response; logout menghapusnya.
 """
 
+import secrets
 from datetime import UTC, datetime
 from urllib.parse import urlencode
 from uuid import uuid4
@@ -43,6 +44,14 @@ def _auth_rate_limit(scope: str):
 async def _get_user_by_email(db: AsyncSession, email: str) -> User | None:
     result = await db.execute(select(User).where(User.email == email.lower()))
     return result.scalar_one_or_none()
+
+
+def _google_callback_uri() -> str:
+    """redirect_uri OAuth — sumber tunggal kebenaran untuk kedua langkah
+    (authorize & token exchange). `WEB_URL` dibersihkan dari trailing slash
+    agar tidak menghasilkan `//api/...` (penyebab redirect_uri_mismatch yang
+    sulit dilacak)."""
+    return f"{settings.web_url.rstrip('/')}/api/v1/auth/google/callback"
 
 
 @router.post(
@@ -152,32 +161,65 @@ async def grant_privacy_consent(
 @router.get(
     "/auth/google",
     summary="Mulai login Google (redirect ke Google)",
+    status_code=status.HTTP_302_FOUND,
+    responses={
+        302: {"description": "Redirect ke Google OAuth consent"},
+        503: {"description": "Google login belum dikonfigurasi (GOOGLE_CLIENT_ID kosong)"},
+    },
 )
-async def google_login() -> dict[str, str]:
+async def google_login() -> RedirectResponse:
     if not settings.google_client_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Google login belum dikonfigurasi (GOOGLE_CLIENT_ID kosong)",
         )
+    # state (login CSRF): nilai acak dikirim ke Google & disimpan di cookie
+    # sesi pendek; callback harus mengembalikannya persis (secrets.compare_digest).
+    state = secrets.token_urlsafe(24)
     params = urlencode(
         {
             "client_id": settings.google_client_id,
-            "redirect_uri": f"{settings.web_url}/api/v1/auth/google/callback",
+            "redirect_uri": _google_callback_uri(),
             "response_type": "code",
             "scope": "openid email profile",
+            "state": state,
         }
     )
-    return {"url": f"{GOOGLE_AUTH_URL}?{params}"}
+    # Redirect langsung (bukan JSON) — tombol "Lanjut dengan Google" di web
+    # adalah anchor biasa, jadi browser harus diarahkan ke Google di sini.
+    response = RedirectResponse(
+        url=f"{GOOGLE_AUTH_URL}?{params}",
+        status_code=status.HTTP_302_FOUND,
+    )
+    response.set_cookie(
+        "oauth_state",
+        state,
+        max_age=600,  # 10 menit — sesi login pendek
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/api/v1/auth/google/callback",
+    )
+    return response
 
 
 @router.get(
     "/auth/google/callback",
     summary="Callback Google — tukar code dengan token lalu set cookie",
     response_model=None,
+    responses={
+        303: {"description": "Redirect ke web setelah login sukses"},
+        400: {"description": "State OAuth tidak valid / email tidak tersedia"},
+        401: {"description": "Gagal menukar kode Google"},
+        403: {"description": "Akun dinonaktifkan"},
+        503: {"description": "Google login belum dikonfigurasi"},
+    },
 )
 async def google_callback(
-    code: str,
     request: Request,
+    code: str | None = None,
+    error: str | None = None,
+    state: str | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     if not settings.google_client_id:
@@ -186,6 +228,31 @@ async def google_callback(
             detail="Google login belum dikonfigurasi",
         )
 
+    # User menolak consent / membatalkan di Google → redirect balik ke web
+    # (bukan 422 JSON mentah). Gagal karena error lain juga dilimpahkan.
+    if error or not code:
+        return RedirectResponse(
+            url=settings.web_url, status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    # Login CSRF: state dari Google harus persis sama dengan cookie yang
+    # kita set saat memulai login (bandingkan secara constant-time).
+    expected_state = request.cookies.get("oauth_state")
+    if not expected_state or not state or not secrets.compare_digest(
+        expected_state, state
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Parameter state OAuth tidak valid — mulai login lagi",
+        )
+
+    # redirect_uri HARUS persis sama dengan yang dipakai saat authorize
+    # (dan yang didaftarkan di Google Console). Dipakai web_url dari settings,
+    # bukan request.url_for — yang terakhir bergantung pada Host/forwarded
+    # header proxy dan bisa menghasilkan http:// padahal terdaftar https://
+    # (redirect_uri_mismatch). web_url = sumber tunggal kebenaran.
+    redirect_uri = _google_callback_uri()
+
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
             GOOGLE_TOKEN_URL,
@@ -193,7 +260,7 @@ async def google_callback(
                 "code": code,
                 "client_id": settings.google_client_id,
                 "client_secret": settings.google_client_secret,
-                "redirect_uri": str(request.url_for("google_callback")),
+                "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
             },
         )
@@ -214,6 +281,13 @@ async def google_callback(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Akun Google tidak memiliki email",
+        )
+    # Hardening: tolak akun Google dengan email belum terverifikasi
+    # (email_verified=False). None dianggap lolos (userinfo lama/parsial).
+    if info.get("email_verified") is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email Google belum terverifikasi",
         )
 
     user = await _get_user_by_email(db, email)
@@ -237,4 +311,12 @@ async def google_callback(
 
     response = RedirectResponse(url=settings.web_url, status_code=status.HTTP_303_SEE_OTHER)
     set_auth_cookie(response, create_access_token(user.id))
+    # State CSRF hanya dipakai sekali — hapus agar tidak bisa dipakai ulang.
+    response.delete_cookie(
+        "oauth_state",
+        path="/api/v1/auth/google/callback",
+        secure=settings.cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
     return response

@@ -21,9 +21,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from PIL import Image, ImageEnhance, ImageFilter
+from sqlalchemy import update
 
 from app.core.config import settings
 from app.core.quota import refund_credit, refund_quota
+from app.core.storage import cleanup_local, delete_if_inside, ensure_local, publish_result
 from app.db.session import async_session_factory
 from app.models.job import Job, JobStatus
 from app.models.user import User
@@ -239,6 +241,74 @@ def _effective_outscale(job: Job) -> int:
     return max(1, cap // longest)
 
 
+async def _claim_job(session, job_id: str, force_retry: bool) -> Job | None:
+    """Klaim ATOMIK job lintas worker (Fase 3 multi-instance, NFR-02).
+
+    Transisi `queued -> processing` (atau `failed -> processing` untuk
+    retry) dilakukan sebagai UPDATE dengan status guard di SQL — bukan
+    baca-lalu-tulis. Saat dua worker menerima job yang sama (redelivery
+    setelah crash: `acks_late` + `task_reject_on_worker_lost` di
+    worker.py), HANYA SATU yang menang (rowcount 1); yang kalah mendapat
+    None -> job "skipped": tanpa proses, tanpa refund ganda.
+
+    Return objek Job segar bila klaim menang, None bila kalah.
+    """
+    allowed = (
+        JobStatus.FAILED.value if force_retry else JobStatus.QUEUED.value
+    )
+    result = await session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status == allowed)
+        .values(status=JobStatus.PROCESSING.value, error=None)
+    )
+    if result.rowcount != 1:
+        return None
+    await session.commit()
+    return await session.get(Job, job_id)
+
+
+async def _complete_job(session, job_id: str, result_path: str) -> bool:
+    """Tulis `completed` HANYA bila job masih `processing`.
+
+    Guard race stale-check vs worker: bila stale-check menandai job
+    `failed` (refund sudah cair) saat worker masih memproses, worker TIDAK
+    boleh menimpa status — menimpa = user dapat hasil SEKALIGUS refund
+    (double-benefit). Return False bila job bukan milik kita lagi.
+
+    Catatan: `synchronize_session` default (evaluate) tetap menyinkronkan
+    objek in-memory walau rowcount 0 saat race — objek bisa "berbohong"
+    (status jadi completed lokal) padahal DB masih failed. Aman: sesi
+    ditutup tanpa commit di jalur itu, jadi tidak ada yang terpersist.
+    """
+    result = await session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status == JobStatus.PROCESSING.value)
+        .values(
+            status=JobStatus.COMPLETED.value,
+            result_path=result_path,
+            finished_at=datetime.now(UTC),
+            error=None,
+        )
+    )
+    return result.rowcount == 1
+
+
+async def _fail_job(session, job_id: str, error: str) -> bool:
+    """Tandai `failed` HANYA bila job masih `processing`.
+
+    Guard identik dengan `_complete_job`: mencegah refund GANDA saat
+    redelivery — worker kedua yang gagal di job yang sudah ditandai
+    `failed` oleh pihak lain tidak boleh refund lagi. (`finished_at` sengaja
+    TIDAK di-set di jalur gagal — kontrak test: job failed tanpa finished_at.)
+    """
+    result = await session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status == JobStatus.PROCESSING.value)
+        .values(status=JobStatus.FAILED.value, error=error)
+    )
+    return result.rowcount == 1
+
+
 async def process_job(
     job_id: str,
     *,
@@ -257,33 +327,46 @@ async def process_job(
       percobaan retry yang masih punya sisa kesempatan; refund hanya di
       percobaan TERAKHIR (mencegah refund berlipat untuk 1 job).
 
-    Return status akhir job ("completed"/"failed") agar pemanggil (task
-    Celery) bisa memutuskan retry — lihat `process_enhancement`.
+    Multi-instance (Fase 3): klaim ATOMIK + guard selesai/gagal di SQL —
+    lihat `_claim_job`/`_complete_job`/`_fail_job`. Return:
+    - "completed"/"failed" bila transisi berhasil (pemanggil bisa retry);
+    - None bila job tidak dapat diklaim atau status sudah diubah pihak lain
+      (redelivery, race stale-check) — tanpa proses, tanpa retry.
 
     NOTE (NFR-03): job yang crash SETELAH commit `processing` tetap bisa
     stuck di status itu — ditutup oleh stale-check `recover_stale_jobs`
     (app/tasks/stale.py) yang menandainya `failed` + refund.
     """
     async with async_session_factory() as session:
-        job = await session.get(Job, job_id)
+        job = await _claim_job(session, job_id, force_retry)
         if job is None:
             return None
-        # QUEUED selalu boleh diproses; FAILED hanya bila force_retry.
-        if job.status != JobStatus.QUEUED.value and not (
-            force_retry and job.status == JobStatus.FAILED.value
-        ):
-            return None
-        job.status = JobStatus.PROCESSING.value
-        job.error = None  # bersihkan error percobaan sebelumnya saat retry
-        await session.commit()
         try:
-            job.result_path = _enhance(job)
-            job.status = JobStatus.COMPLETED.value
-            job.finished_at = datetime.now(UTC)
-            job.error = None  # hygiene: sapu pesan stale-check bila ada race
+            # R2: pastikan original tersedia di disk lokal (local: no-op)
+            # sebelum pipeline membaca file.
+            await ensure_local(job.original_path)
+            try:
+                job.result_path = _enhance(job)
+                # R2: upload hasil ke bucket & hapus salinan lokal (local: no-op).
+                await publish_result(job.result_path)
+            finally:
+                # R2: hapus SALINAN lokal original & hasil parsial (gagal di
+                # tengah) — jangan menumpuk di disk worker. Local: no-op.
+                await cleanup_local(job.original_path, job.result_path)
+            if not await _complete_job(session, job_id, job.result_path):
+                # Race stale-check: job sudah `failed` + refund. Jangan timpa
+                # status; hapus hasil yatim (local) agar tidak bocor disk;
+                # return None = tanpa retry (mencegah double-benefit).
+                await delete_if_inside(job.result_path, settings.result_dir)
+                return None
+            await session.commit()
+            return JobStatus.COMPLETED.value
         except Exception as exc:
-            job.status = JobStatus.FAILED.value
-            job.error = str(exc)[:500]
+            owned = await _fail_job(session, job_id, str(exc)[:500])
+            if not owned:
+                # Job sudah `failed` oleh pihak lain (stale-check / worker
+                # lain) — refund sudah dilakukan; jangan retry (return None).
+                return None
             if refund_on_fail:
                 # FR-06/FR-11: job gagal TIDAK menghabiskan slot — kembalikan
                 # sesuai sumber pembayaran: kuota gratis (floor 0) atau 1
@@ -295,8 +378,8 @@ async def process_job(
                         refund_credit(user)
                     else:
                         refund_quota(user)
-        await session.commit()
-        return job.status
+            await session.commit()
+            return JobStatus.FAILED.value
 
 
 def _enhance(job: Job) -> str:

@@ -30,7 +30,7 @@ Keputusan desain (NFR-03):
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.quota import refund_credit, refund_quota
@@ -61,12 +61,28 @@ async def recover_stale_jobs(now: datetime | None = None) -> dict[str, int]:
             )
         )
         for job in rows.scalars():
-            job.status = JobStatus.FAILED.value
-            job.error = (
-                "Waktu pemrosesan habis — job tersangkut di status processing "
-                f"lebih dari {settings.job_stale_minutes} menit (NFR-03). "
-                "Silakan coba lagi."
+            # Tandai failed secara ATOMIK (guard status, pola Fase 3 yang
+            # sama dengan _fail_job di enhance.py): hanya sweeper yang
+            # menang UPDATE yang refund — dua sweeper konkuren (mis. beat
+            # ke-dobel) tidak bisa refund ganda. Idempoten: job yang sudah
+            # diubah pihak lain -> rowcount 0 -> dilewati.
+            result = await session.execute(
+                update(Job)
+                .where(
+                    Job.id == job.id,
+                    Job.status == JobStatus.PROCESSING.value,
+                )
+                .values(
+                    status=JobStatus.FAILED.value,
+                    error=(
+                        "Waktu pemrosesan habis — job tersangkut di status "
+                        f"processing lebih dari {settings.job_stale_minutes} "
+                        "menit (NFR-03). Silakan coba lagi."
+                    ),
+                )
             )
+            if result.rowcount != 1:
+                continue
             user = await session.get(User, job.user_id)
             if user is not None:
                 # FR-11: refund SESUAI SUMBER — job berbayar mengembalikan

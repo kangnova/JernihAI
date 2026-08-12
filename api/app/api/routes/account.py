@@ -15,9 +15,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.quota import quota_limit, quota_remaining
 from app.core.security import clear_auth_cookie
-from app.core.storage import resolve
+from app.core.storage import delete_if_inside
 from app.db.session import get_db
 from app.models.job import Job
 from app.models.user import User
@@ -128,13 +129,16 @@ async def delete_account(
 
     deleted_files = 0
     for job in jobs:
-        for attr in ("original_path", "result_path"):
+        for attr, base in (
+            ("original_path", settings.upload_dir),
+            ("result_path", settings.result_dir),
+        ):
             path = getattr(job, attr)
             if not path:
                 continue
             try:
-                resolve(path).unlink(missing_ok=True)
-                deleted_files += 1
+                if await delete_if_inside(path, base):
+                    deleted_files += 1
             except OSError as exc:  # noqa: BLE001 — lanjutkan hapus data lain
                 logger.warning("Gagal hapus file %s saat hapus akun: %s", path, exc)
 

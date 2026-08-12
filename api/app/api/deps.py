@@ -126,7 +126,7 @@ def api_key_rate_limit():
             if ctx.key.tier == "pro"
             else settings.api_rate_limit_free_per_minute
         )
-        rate_limit_check(f"key:{ctx.key.id}", "api:key", limit)
+        await rate_limit_check(f"key:{ctx.key.id}", "api:key", limit)
         return ctx
 
     return dependency

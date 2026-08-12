@@ -186,9 +186,16 @@ bisa diuji end-to-end dari browser tanpa VPS terpisah. Biaya lebih tinggi
 > (era `create_all`) langsung dikonvergensikan — **tanpa**
 > `docker compose down -v`. Manual: `docker compose run --rm api alembic upgrade head`.
 
-> **Gap produksi yang diketahui:** `worker-gpu` dan `api` membutuhkan
-> storage bersama (bind mount di Opsi B; di produksi multi-node pakai
-> Cloudflare R2 — abstraksi `core/storage.py` sudah siap, lihat prd.md §9).
+> **Storage produksi (multi-node):** Opsi B memakai bind mount karena satu
+> instance. Di produksi, `worker-gpu` TIDAK berbagi disk dengan `api` —
+> set `STORAGE_BACKEND=r2` (+ kredensial R2) di `.env` agar original
+> diunduh dari bucket & hasil di-upload balik (panduan:
+> [GUIDE_R2.md](./GUIDE_R2.md)).
+>
+> **Banyak worker GPU (NFR-02):** dengan R2, tiap instance GPU bisa
+> menambahkan worker tanpa volume bersama — cukup `--scale worker-gpu=N`
+> di pool masing-masing (klaim job atomik mencegah job diproses 2×).
+> Panduan skala penuh (replica API + beberapa worker): [GUIDE_SCALE.md](./GUIDE_SCALE.md).
 
 ---
 
@@ -202,7 +209,7 @@ bisa diuji end-to-end dari browser tanpa VPS terpisah. Biaya lebih tinggi
 | `torch.cuda.is_available()=False` | Cek `nvidia-smi`; host Vast biasanya sudah benar, jarang terjadi |
 | Env var tidak terlihat di SSH | On-start: `env >> /etc/environment` |
 | `basicsr`/`numpy` error saat build | Versi sudah di-pin di extra `gpu` (pyproject). Pastikan `numpy<2` |
-| Hasil download 404 di Opsi B | Pastikan `worker-gpu` memakai bind mount dari `compose.vast.yml` (storage bersama) |
+| Hasil download 404 di Opsi B | Pastikan `worker-gpu` memakai bind mount dari `compose.vast.yml` (storage bersama); di produksi multi-node pastikan `STORAGE_BACKEND=r2` + kredensial lengkap (GUIDE_R2.md) |
 | GPU kedetect tapi lambat | Cek `half=True` di log (`Backend real siap`) — FP16 wajib di CUDA |
 
 ---
@@ -266,6 +273,10 @@ Integrasikan ke cron / Task Scheduler (cek tiap 15 menit):
 Checklist:
 
 - [ ] GPU spot (T4/4090), bukan on-demand — untuk tes sekali jalan
+- [ ] (Produksi multi-worker) pantau antrean job dengan
+      `infra/monitor/queue_monitor.py` (GUIDE_SCALE.md §4) — antrean
+      menumpuk = tambah worker GPU; idle lama = turunkan (GPU nyala tanpa
+      kerja tetap ditagih)
 - [ ] Durasi target < 1 jam (build di instance ≠ billing tinggi; GPU idle tetap
       ditagih → jangan biarkan instance nyala tanpa kerja)
 - [ ] **Destroy seketika** setelah hasil tercatat — atau biarkan

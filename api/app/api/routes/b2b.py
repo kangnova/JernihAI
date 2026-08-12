@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,7 +33,12 @@ from app.api.routes.jobs import (
 )
 from app.core.apikey import generate_api_key
 from app.core.config import settings
-from app.core.storage import resolve, save_upload
+from app.core.storage import (
+    delete_if_inside,
+    download_url,
+    resolve,
+    save_upload,
+)
 from app.db.session import get_db
 from app.models.apikey import ApiKey
 from app.models.job import Job, JobStatus
@@ -304,7 +309,7 @@ async def b2b_create_job(
     # (user tidak membayar untuk job yang pasti gagal).
     _validate_png_output(data, output_format)
     job_id = str(uuid4())
-    original_path = save_upload(data=data, job_id=job_id, ext=ext)
+    original_path = await save_upload(data=data, job_id=job_id, ext=ext)
     job = _build_job(
         job_id, user, original_path, file.filename or "gambar",
         scale, output_format, face_enhance, denoise, color_enhance,
@@ -320,7 +325,7 @@ async def b2b_create_job(
         .values(credit_balance=User.credit_balance - 1)
     )
     if result.rowcount == 0:
-        resolve(original_path).unlink(missing_ok=True)
+        await delete_if_inside(original_path, settings.upload_dir)
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail=(
@@ -333,7 +338,7 @@ async def b2b_create_job(
     try:
         await db.commit()
     except Exception:
-        resolve(original_path).unlink(missing_ok=True)
+        await delete_if_inside(original_path, settings.upload_dir)
         raise
     await db.refresh(job)
 
@@ -377,9 +382,11 @@ async def b2b_get_job(
 @router.get(
     "/jobs/{job_id}/result",
     summary="B2B: unduh hasil proses (FR-14)",
+    response_model=None,  # respons biner FileResponse / 302 — bukan JSON
     response_description=(
-        "File hasil (binary). Media type mengikuti `output_format` job: "
-        "`image/webp` (default), `image/jpeg`, atau `image/png`."
+        "File hasil. Media type mengikuti `output_format` job: `image/webp` "
+        "(default), `image/jpeg`, atau `image/png` — saat storage R2, "
+        "respons adalah 302 ke presigned URL (unduhan tetap berfungsi)."
     ),
     responses={
         200: {
@@ -407,7 +414,7 @@ async def b2b_download_result(
     job_id: str,
     db: AsyncSession = Depends(get_db),
     ctx: ApiKeyContext = Depends(api_key_rate_limit()),
-) -> FileResponse:
+) -> FileResponse | RedirectResponse:
     job = await db.scalar(
         select(Job).where(Job.id == job_id, Job.user_id == ctx.user.id)
     )
@@ -425,6 +432,11 @@ async def b2b_download_result(
             status_code=status.HTTP_409_CONFLICT,
             detail="Hasil belum siap (status: " + (job.status or "?") + ")",
         )
+    filename = f"{job.id}-{job.scale}x.{job.output_format}"
+    # R2: 302 ke presigned URL (egress gratis). Local: FileResponse disk.
+    url = await download_url(job.result_path, filename)
+    if url:
+        return RedirectResponse(url)
     path = resolve(job.result_path)
     if not path.exists():
         raise HTTPException(
@@ -434,7 +446,7 @@ async def b2b_download_result(
     return FileResponse(
         path,
         media_type=CONTENT_TYPES[job.output_format],
-        filename=f"{job.id}-{job.scale}x.{job.output_format}",
+        filename=filename,
     )
 
 

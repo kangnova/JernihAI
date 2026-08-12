@@ -40,6 +40,10 @@ celery_app.conf.update(
     # di-ack, task dikirim ulang ke worker lain (bukan hilang selamanya).
     task_reject_on_worker_lost=True,
     task_acks_on_failure_or_timeout=False,
+    # Fase 3 (multi-instance): worker TIDAK crash-loop saat Redis sempat
+    # restart bersamaan (scale up / rolling deploy) — tetap mencoba
+    # menyambung broker sampai berhasil.
+    broker_connection_retry_on_startup=True,
 )
 
 # Jadwal berkala (proses Celery Beat terpisah, lihat docker-compose

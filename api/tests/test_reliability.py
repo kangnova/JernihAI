@@ -25,6 +25,7 @@ from sqlalchemy.pool import StaticPool
 import app.tasks.enhance as enhance_module
 import app.tasks.stale as stale_module
 from app.core.config import settings
+from app.core.quota import refund_quota
 from app.db.session import get_db
 from app.main import app
 from app.models.base import Base
@@ -210,6 +211,104 @@ async def test_process_job_refund_on_final_attempt(db, tmp_path):
     await enhance_module.process_job(job_id, refund_on_fail=True)
 
     assert await _quota_used(db, user_id) == 0  # di-refund
+
+
+# --- Fase 3 (multi-instance): klaim atomik & guard race stale-check ---
+
+
+async def test_redelivery_skips_job_claimed_by_other_worker(db):
+    """Redelivery: job sudah `processing` (dipegang worker lain) -> skip.
+
+    Worker mati di tengah -> broker redeliver (acks_late +
+    reject_on_worker_lost); worker kedua TIDAK boleh memproses ulang job
+    yang sama (double-process / double-refund).
+    """
+    job_id = await _add_job(db, status=JobStatus.PROCESSING.value)
+
+    result = await enhance_module.process_job(job_id)
+
+    assert result is None  # "skipped" — bukan diproses ulang
+    async with db() as session:
+        job = await session.get(Job, job_id)
+        assert job.status == JobStatus.PROCESSING.value  # tak berubah
+
+
+async def test_claim_atomic_only_one_worker_wins(db):
+    """Klaim atomik: transisi status via SQL guard — yang kalah tak dapat job."""
+    job_id = await _add_job(db, status=JobStatus.PROCESSING.value)
+    async with db() as session:
+        job = await enhance_module._claim_job(session, job_id, force_retry=False)
+        assert job is None  # status bukan queued -> klaim ditolak
+
+
+async def test_redelivery_after_failure_no_double_refund(db, tmp_path):
+    """Redelivery setelah gagal: refund TIDAK dobel (guard `_fail_job`)."""
+    async with db() as session:
+        session.add(
+            User(
+                id="u-dbl",
+                email="dbl@example.com",
+                password_hash="x",
+                credit_balance=0,  # 1 kredit sudah dipakai job ini
+                free_daily_quota_used=0,
+                free_quota_date="1970-01-01",
+                privacy_consent_at=NOW,
+            )
+        )
+        await session.commit()
+    orig = _write_upload(tmp_path, "dbl.png")
+    job_id = await _add_job(
+        db, user_id="u-dbl", uses_credit=True, original_path=orig,
+    )
+    Path(orig).unlink()  # force failure
+
+    first = await enhance_module.process_job(job_id, refund_on_fail=True)
+    assert first == JobStatus.FAILED.value
+
+    # Broker redeliver pesan yang sama -> worker kedua memanggil process_job
+    # TANPA force_retry: klaim ditolak, refund tidak dijalankan lagi.
+    again = await enhance_module.process_job(job_id, refund_on_fail=True)
+    assert again is None
+
+    async with db() as session:
+        user = await session.get(User, "u-dbl")
+        assert user.credit_balance == 1  # refund TEPAT SEKALI, bukan 2
+
+
+async def test_stale_race_completion_does_not_overwrite(db, tmp_path):
+    """Race stale-check vs worker: guard selesai mencegah double-benefit.
+
+    Stale-check menandai job `failed` + refund saat worker masih memproses;
+    worker yang selesai TIDAK boleh menimpa status (user tidak boleh dapat
+    hasil + refund sekaligus).
+    """
+    user_id = await _user_with_used_quota(db)
+    orig = _write_upload(tmp_path, "race.png")
+    job_id = await _add_job(db, user_id=user_id, original_path=orig)
+
+    # Simulasi stale-check yang menang duluan: failed + refund.
+    async with db() as session:
+        job = await session.get(Job, job_id)
+        job.status = JobStatus.FAILED.value
+        job.error = "Waktu pemrosesan habis (NFR-03)"
+        user = await session.get(User, user_id)
+        refund_quota(user)
+        await session.commit()
+
+    # Worker 'selesai' -> completion guard: job bukan processing lagi -> tolak.
+    async with db() as session:
+        ok = await enhance_module._complete_job(
+            session, job_id, f"{settings.result_dir}/race.webp"
+        )
+        await session.commit()
+
+    assert ok is False
+    async with db() as session:
+        job = await session.get(Job, job_id)
+        assert job.status == JobStatus.FAILED.value  # tidak ditimpa
+        assert "NFR-03" in job.error  # pesan stale-check dipertahankan
+        assert job.result_path is None  # hasil tidak direferensikan
+    assert await _quota_used(db, user_id) == 0  # refund tetap 1x
 
 
 # --- process_enhancement: kebijakan retry Celery ---

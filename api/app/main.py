@@ -28,6 +28,9 @@ async def lifespan(app: FastAPI):
     # `Base.metadata.create_all` TIDAK dipakai di runtime: tidak bisa
     # menghapus kolom & tidak ada versioning. Test memanggil create_all
     # eksplisit per-fixture (SQLite in-memory), jadi aman dihapus.
+    # Hardening (fail-fast) sudah dilakukan oleh validator Settings saat
+    # import; di sini hanya warning non-fatal untuk gap produksi.
+    settings.log_production_warnings()
     yield
     await engine.dispose()
 

@@ -8,7 +8,11 @@ sandbox sebelum cutover.
 > 🧭 **Baca dulu:** runbook ini memakai `docker compose` biasa di satu VPS
 > (arsitektur dev/prod tunggal, ADR-001). Deploy worker GPU terpisah ada di
 > [DEPLOY_VAST.md](./DEPLOY_VAST.md). Alur akun Vast.ai ada di
-> [GUIDE_VAST_ACCOUNT.md](./GUIDE_VAST_ACCOUNT.md).
+> [GUIDE_VAST_ACCOUNT.md](./GUIDE_VAST_ACCOUNT.md). Aktifkan login Google
+> (FR-01) di [GUIDE_GOOGLE_OAUTH.md](./GUIDE_GOOGLE_OAUTH.md). Storage
+> produksi & multi-node (Cloudflare R2) di [GUIDE_R2.md](./GUIDE_R2.md).
+> Skala ke **multi-instance / autoscale** (replica API + beberapa worker
+> GPU) di [GUIDE_SCALE.md](./GUIDE_SCALE.md).
 
 ---
 
@@ -19,7 +23,7 @@ sandbox sebelum cutover.
 - **Domain** (mis. `jernihai.example.com`) yang mengarah ke VPS, dengan
   **HTTPS**. Midtrans **hanya mengirim notifikasi webhook ke URL HTTPS** —
   tanpa HTTPS, pembayaran tidak akan masuk. (Belum punya domain/HTTPS?
-  Lihat §7 tentang gateway Nginx + Let's Encrypt, atau coba dulu dengan
+  Lihat §8 tentang gateway Nginx + Let's Encrypt, atau coba dulu dengan
   tunnel seperti `cloudflared`.)
 - Repo sudah di-`clone` dan di-push ke `origin/main`.
 - Akun [dashboard.sandbox.midtrans.com](https://dashboard.sandbox.midtrans.com)
@@ -49,7 +53,7 @@ Lakukan di **dashboard sandbox** dulu (produksi menyusul di §7):
 
 ---
 
-## 3. Isi env: MIDTRANS_* & ADMIN_EMAILS
+## 3. Isi env: KEAMANAN + MIDTRANS_* + ADMIN_EMAILS
 
 Semua variabel di bawah diisi di file **`.env` root repo** (sudah
 di-`.gitignore`, contoh template di `.env.example`). `docker-compose.yml`
@@ -60,7 +64,43 @@ cd /path/to/JernihAI
 cp .env.example .env
 ```
 
-Lalu edit `.env`:
+Lalu edit `.env` — **seksi keamanan dulu (wajib)**. Sejak hardening
+(`app/core/config.py`), `api` **menolak start (fail-fast)** bila
+`ENVIRONMENT=production` dengan `JWT_SECRET` dev/lemah (< 32 byte) atau
+`COOKIE_SECURE=false`:
+
+```dotenv
+# --- Keamanan (WAJIB — fail-fast memblokir start bila salah) ---
+ENVIRONMENT=production
+# Secret acak >= 32 byte. Generate:
+#   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+JWT_SECRET=<tempel-hasil-generate>
+# Sesi hanya lewat HTTPS (cookie Secure).
+COOKIE_SECURE=true
+# Origin web yang sah (list JSON) — ganti ke domain produksi, bukan localhost.
+CORS_ORIGINS=["https://jernihai.example.com"]
+# URL publik web (redirect Google OAuth / link callback).
+WEB_URL=https://jernihai.example.com
+# URL API yang DILIHAT BROWSER — WAJIB domain publik (default localhost
+# membuat browser pengunjung memanggil localhost miliknya sendiri).
+NEXT_PUBLIC_API_URL=https://jernihai.example.com
+
+# --- Google OAuth (FR-01 — opsional) ---
+# Panduan lengkap: docs/GUIDE_GOOGLE_OAUTH.md (Google Cloud Console →
+# OAuth client ID → Authorized redirect URI = <WEB_URL>/api/v1/auth/google/callback)
+# Kosong = tombol Google nonaktif (HTTP 503).
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+```
+
+> ℹ️ **`NEXT_PUBLIC_API_URL` mengikuti cara akses situs:** dengan gateway
+> (§8) nilainya = origin domain (`https://jernihai.example.com`, tanpa
+> `/api` — endpoint tetap `/api/v1/...`). Tanpa gateway (akses langsung
+> `http://VPS_IP:3000`), nilainya jadi `http://VPS_IP:8000` dan
+> `CORS_ORIGINS` ikut menunjuk `http://VPS_IP:3000`. Sesuaikan dengan
+> topologi yang dipakai.
+
+Lalu bagian pembayaran & admin:
 
 ```dotenv
 # --- Pembayaran (FR-11 — Midtrans Snap) ---
@@ -76,11 +116,6 @@ NEXT_PUBLIC_MIDTRANS_PRODUCTION=false
 # --- Admin (FR-13) ---
 # Email yang berhak mengakses /admin & endpoint admin (list JSON).
 ADMIN_EMAILS=["admin@example.com"]
-
-# --- Wajib di produksi (bukan dev) ---
-JWT_SECRET=<ganti-dengan-secret-kuat-acak>
-COOKIE_SECURE=true
-ENVIRONMENT=production
 ```
 
 > ℹ️ **Format `ADMIN_EMAILS`:** list JSON string, mis.
@@ -91,6 +126,28 @@ ENVIRONMENT=production
 > ⚠️ **Server key kosong = mode MOCK:** tanpa `MIDTRANS_SERVER_KEY`,
 > checkout mengembalikan token Snap palsu dan webhook menolak semua
 > notifikasi (403). Pastikan terisi sebelum menguji pembayaran.
+>
+> 🛡️ **Perilaku fail-fast (hardening):** bila `ENVIRONMENT=production` dan
+> ada masalah, container `api` langsung **crash saat start** dengan pesan
+> jelas `Konfigurasi produksi tidak aman` di log — ini proteksi, bukan bug.
+> Perbaiki `.env`, lalu `docker compose up -d --force-recreate api`.
+> Setelah start sukses, `api` juga menulis **warning non-fatal** di log bila
+> `ADMIN_EMAILS` kosong, Google OAuth mati, Midtrans masih MOCK, atau CORS
+> masih localhost (`log_production_warnings`) — cek sekali lalu lanjut.
+>
+> 🌐 **HTTPS wajib sebelum `ENVIRONMENT=production`:** cookie `Secure`
+> (`COOKIE_SECURE=true`) TIDAK dikirim via HTTP → login rusak total tanpa
+> HTTPS, dan `COOKIE_SECURE=false` di produksi justru diblokir fail-fast.
+> Jadi urutan yang benar: siapkan domain + TLS (gateway §8) DULU, baru set
+> `ENVIRONMENT=production`. Selama belum ada HTTPS, biarkan
+> `ENVIRONMENT=development` (fail-fast tidak aktif — aman untuk uji awal
+> sandbox via tunnel/IP, sebelum go-live).
+>
+> 🖥️ **Catatan arsitektur (ADR-001):** compose ini menjalankan `web` dalam
+> mode dev (`npm run dev`) — desain dev/prod tunggal yang disengaja.
+> Untuk jalur yang lebih hardened, workflow `release-images.yml` membangun
+> image Next.js standalone (`NEXT_PUBLIC_API_URL` di-bake saat build dari
+> variabel repo) — cukup set `vars.NEXT_PUBLIC_API_URL` di GitHub.
 
 ---
 
@@ -128,7 +185,10 @@ kita di dashboard:
 ```bash
 cd /path/to/JernihAI
 
-# Build & start semua service + beat (retensi FR-07 & stale-check NFR-03).
+# (0) Pre-flight: validasi interpolasi env .env di compose (tanpa side effect)
+docker compose config --quiet && echo "OK: config valid"
+
+# (1) Build & start semua service + beat (retensi FR-07 & stale-check NFR-03).
 # Service `api` otomatis menjalankan `alembic upgrade head` (ADR-011)
 # SEBELUM start — skema DB (users/jobs/transactions) dibuat/di-upgrade
 # tanpa kehilangan data. TIDAK perlu `docker compose down -v`.
@@ -136,6 +196,17 @@ docker compose up -d --build worker beat web api
 
 docker compose ps   # semua service: Up (healthy untuk db/redis)
 ```
+
+> 🛡️ **Kalau `api` crash-loop (restart terus):** itu biasanya **fail-fast
+> hardening** yang menolak konfigurasi tidak aman. Cek alasan pastinya:
+> ```bash
+> docker compose logs api | tail -30
+> # "Konfigurasi produksi tidak aman — perbaiki sebelum start:" + daftar masalah
+> ```
+> Perbaiki `.env` (umumnya: `JWT_SECRET` belum diganti, `COOKIE_SECURE`
+> masih false, atau `ENVIRONMENT` malah tidak production), lalu
+> `docker compose up -d --force-recreate api`. Jangan menonaktifkan
+> validator — itu lapis keamanan terakhir sebelum data user masuk.
 
 > 🔄 **Upgrade VPS yang SUDAH berjalan** (menarik commit terbaru): jalankan
 > migrasi SEBELUM worker di-restart agar tidak ada worker yang memulai
@@ -145,7 +216,7 @@ docker compose ps   # semua service: Up (healthy untuk db/redis)
 >   && docker compose up -d --build api web worker beat
 > ```
 
-- **Web:** http://jernihai.example.com (lewat gateway/HTTPS, §7)
+- **Web:** http://jernihai.example.com (lewat gateway/HTTPS, §8)
 - **API docs:** https://jernihai.example.com/docs
 - **Worker GPU (pipeline asli):** jalankan terpisah dengan `--profile gpu`
   (lihat [DEPLOY_VAST.md](./DEPLOY_VAST.md) §3 — butuh storage bersama:
@@ -191,7 +262,7 @@ masuk → proses gambar pakai kredit.
    docker compose logs api | grep -iE "webhook|kredit|signature"
    # Harus ada: "Kredit <N> cair untuk user ... (order ...)"
    ```
-   > 💡 Bila saldo tidak masuk, lihat §8 Troubleshooting (paling sering:
+   > 💡 Bila saldo tidak masuk, lihat §9 Troubleshooting (paling sering:
    > URL webhook belum HTTPS, signature 403 karena server key salah,
    > atau webhook belum sampai karena domain/port tidak terbuka).
 
@@ -202,6 +273,22 @@ masuk → proses gambar pakai kredit.
 2. Halaman `/billing` tidak berubah saldonya saat kuota gratis masih ada;
    job berbayar yang **gagal** harus mengembalikan kredit (cek `/quota`
    → `credit_balance` kembali naik).
+
+### 6d. Cek warning produksi di log (sekali saja)
+
+```bash
+docker compose logs api 2>&1 | grep -iE "warn|oauth|mock|cors" | tail -10
+```
+
+- **Wajar muncul:** `GOOGLE_CLIENT_ID kosong` HANYA bila login Google
+  sengaja tidak dipakai (opsional — lihat GUIDE_GOOGLE_OAUTH.md);
+  `RATE_LIMIT_BACKEND=memory` bila belum multi-instance (opsional).
+- **TIDAK boleh muncul:** `MIDTRANS_SERVER_KEY kosong` (key sudah diisi §3)
+  dan `CORS_ORIGINS ... localhost`.
+- **Tidak boleh ada `Konfigurasi produksi tidak aman`** — kalau ada, `api`
+  crash saat start (lihat §5). Absennya pesan ini bagus, tapi pastikan juga
+  `ENVIRONMENT=production` benar-benar ter-set — kalau tidak, fail-fast
+  tidak pernah aktif dan proteksi ini diam-diam mati.
 
 ---
 
@@ -234,7 +321,10 @@ Setelah uji sandbox sukses:
 
 > 🔒 **Wajib saat produksi:** `JWT_SECRET` kuat + `COOKIE_SECURE=true` +
 > HTTPS (gateway §8). Jangan pernah pakai key sandbox di produksi dan
-> sebaliknya.
+> sebaliknya. Keempat variabel keamanan §3 (`ENVIRONMENT`, `JWT_SECRET`,
+> `COOKIE_SECURE`, `CORS_ORIGINS`) **tidak boleh diubah** saat cutover —
+> hanya bagian Midtrans yang berganti. Kalau tidak sengaja ter-edit,
+> fail-fast `api` akan mencegah start dengan konfigurasi tidak aman.
 
 ---
 
@@ -253,6 +343,15 @@ docker compose --profile gateway up -d gateway
 - Pastikan path `/api/*` diteruskan ke `api:8000` dan sisanya ke `web:3000`
   (lihat `infra/nginx/nginx.conf`; sesuaikan nama service/domain bila perlu).
 
+> 🔒 **Port `8000` jangan diekspos publik di produksi.** `api` kini
+> menjalankan uvicorn dengan `--proxy-headers` (memercayai `X-Forwarded-For`
+> dari gateway) agar **rate limit per-IP akurat** di balik nginx
+> (NFR-04) — konsekuensinya, client yang bisa mengakses `api:8000`
+> **langsung** dapat spoof header `X-Forwarded-For` dan melewati rate limit.
+> Di produksi: blokir port 8000 di firewall (ufw/security group) atau hapus
+> mapping `8000:8000` dari `docker-compose.yml` — semua trafik masuk lewat
+> gateway §8. Mapping port tetap berguna di dev (`http://localhost:8000`).
+
 ---
 
 ## 9. Troubleshooting
@@ -267,10 +366,49 @@ docker compose --profile gateway up -d gateway
 | Halaman `/admin` tidak muncul untuk email tertentu | Email belum masuk `ADMIN_EMAILS` (list JSON) atau login dengan email beda. Setelah ubah env, restart: `docker compose up -d --force-recreate api`. |
 | Kartu uji ditolak di sandbox | Pakai kartu uji yang benar (4811...1114 sukses; 4111...1112 sengaja ditolak) atau metode lain (QRIS/e-wallet punya tombol simulate di popup Snap). |
 | Token Snap `mock-...` muncul | `MIDTRANS_SERVER_KEY` kosong (mode MOCK). Isi key sandbox lalu restart api. |
+| `api` crash-loop terus dengan log `Konfigurasi produksi tidak aman` | Fail-fast hardening menolak konfigurasi: `JWT_SECRET` masih dev/lemah (< 32 byte), `COOKIE_SECURE=false`, atau `ENVIRONMENT` bukan `production`. Lihat daftar masalah di log, perbaiki `.env`, lalu `docker compose up -d --force-recreate api`. Jangan mematikan validator. |
+| Web tidak bisa upload/login di produksi (error API tak sampai) | `NEXT_PUBLIC_API_URL` masih `http://localhost:8000` (browser pengunjung memanggil localhost miliknya). Set ke domain publik di `.env`, restart web: `docker compose up -d --force-recreate web`. |
+| `api` start tapi log penuh warning `CORS ... localhost` / `ADMIN_EMAILS kosong` | Non-fatal (log_production_warnings). Tetap perbaiki untuk produksi yang benar: `CORS_ORIGINS` + `WEB_URL` ke domain asli, isi `ADMIN_EMAILS`. |
+| `GET /health/metrics` menampilkan `queue.status=error` | Redis broker tidak terjangkau (atau mode eager di dev). Cek `redis` container (`docker compose ps`); metrik lain tetap keluar — endpoint tidak down walau Redis mati (by design). |
+| Antrean menumpuk terus (metrik `queue.length` naik) | Tambah worker: `docker compose up -d --scale worker=2` (dan `worker-gpu` di pool GPU) — panduan autoscale di GUIDE_SCALE.md; cek juga failure rate (`queue_monitor.py --json`) untuk membedakan masalah kapasitas vs model. |
 
 ---
 
 ## 10. Checklist deploy
+
+### Keamanan (hardening — wajib sebelum go-live)
+
+- [ ] `ENVIRONMENT=production` di `.env` (bukan default `development`)
+- [ ] `JWT_SECRET` = hasil `secrets.token_urlsafe(48)` (≥ 32 byte, bukan
+      default dev) — generate sekali, simpan aman
+- [ ] `COOKIE_SECURE=true` (HTTPS aktif — §8)
+- [ ] `CORS_ORIGINS=["https://<domain>"]` + `WEB_URL=https://<domain>`
+      (bukan localhost)
+- [ ] `NEXT_PUBLIC_API_URL=https://<domain>` (URL yang dilihat browser)
+- [ ] (Opsional) `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` terisi &
+      redirect URI `https://<domain>/api/v1/auth/google/callback` terdaftar
+      di Google Console (docs/GUIDE_GOOGLE_OAUTH.md) — tombol Google aktif
+- [ ] `api` start tanpa crash-loop (fail-fast tidak memblokir) & log tidak
+      memuat `Konfigurasi produksi tidak aman`
+- [ ] Storage: `STORAGE_BACKEND=r2` + `R2_ACCOUNT_ID`/`R2_ACCESS_KEY_ID`/
+      `R2_SECRET_ACCESS_KEY`/`R2_BUCKET` terisi (GUIDE_R2.md) — download
+      menjawab 302 presigned, object ada di bucket
+- [ ] Multi-instance: `RATE_LIMIT_BACKEND=redis` (counter dibagi antar
+      instance; `memory` hanya untuk single-instance/dev)
+- [ ] (Bila perlu) Skala multi-instance: `STORAGE_BACKEND=r2` + `--scale
+      api=2 --scale worker=2` — klaim job atomik, konsumsi slot terkunci,
+      migrasi aman (GUIDE_SCALE.md); `beat` TETAP 1 instance
+- [ ] NFR-08 observability: `GET /api/v1/health/metrics` menjawab 200
+      (antrean, throughput, failure rate, latensi) & `queue_monitor.py`
+      berjalan via cron (GUIDE_SCALE.md §4) — sinyal autoscale + alert
+      ntfy/webhook; batasi akses metrik di gateway (tanpa auth)
+- [ ] `docker compose config --quiet` lolos (interpolasi env benar)
+- [ ] `POSTGRES_PASSWORD` diganti dari default `jernihai` — port 5432
+      **di-publish ke host** (`${POSTGRES_PORT:-5432}:5432`): blokir di
+      firewall VPS (ufw/security group) atau hapus mapping port di produksi
+      (akses antar-container tetap jalan via jaringan internal compose)
+
+### Pembayaran & fitur (sandbox → produksi)
 
 - [ ] `.env` terisi: `MIDTRANS_SERVER_KEY` / `MIDTRANS_CLIENT_KEY` (sandbox
       dulu), `MIDTRANS_IS_PRODUCTION=false`, `NEXT_PUBLIC_MIDTRANS_PRODUCTION=false`

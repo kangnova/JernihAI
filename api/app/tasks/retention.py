@@ -13,16 +13,17 @@ Aturan (prd.md FR-07):
   penghapusan sehingga endpoint download bisa menjawab dengan jelas.
 
 Keamanan: file hanya dihapus bila benar-benar berada di dalam `upload_dir`
-atau `result_dir` (guard path traversal).
+atau `result_dir` (guard path traversal) — bekerja untuk backend lokal
+maupun R2 (lihat app/core/storage.py).
 """
 
 import logging
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.storage import delete_if_inside
 from app.db.session import async_session_factory
 from app.models.job import Job, JobStatus
 from app.tasks.worker import celery_app
@@ -30,21 +31,6 @@ from app.tasks.worker import celery_app
 logger = logging.getLogger(__name__)
 
 _DONE_STATUSES = (JobStatus.COMPLETED.value, JobStatus.FAILED.value)
-
-
-def _unlink_if_inside(path: str | None, base_dir: str) -> bool:
-    """Hapus file bila path berada di dalam base_dir (guard traversal)."""
-    if not path:
-        return False
-    try:
-        resolved = Path(path).resolve()
-        base = Path(base_dir).resolve()
-        if resolved.is_relative_to(base) and resolved.is_file():
-            resolved.unlink(missing_ok=True)
-            return True
-    except OSError as exc:  # noqa: BLE001 — file lock dll. tidak menghentikan sweep
-        logger.warning("Gagal hapus %s (retensi): %s", path, exc)
-    return False
 
 
 async def purge_expired(now: datetime | None = None) -> dict[str, int]:
@@ -68,7 +54,7 @@ async def purge_expired(now: datetime | None = None) -> dict[str, int]:
             )
         )
         for job in rows.scalars():
-            if _unlink_if_inside(job.original_path, settings.upload_dir):
+            if await delete_if_inside(job.original_path, settings.upload_dir):
                 job.original_deleted_at = now
                 stats["original_deleted"] += 1
 
@@ -82,7 +68,7 @@ async def purge_expired(now: datetime | None = None) -> dict[str, int]:
             )
         )
         for job in rows.scalars():
-            if _unlink_if_inside(job.result_path, settings.result_dir):
+            if await delete_if_inside(job.result_path, settings.result_dir):
                 job.result_deleted_at = now
                 stats["result_deleted"] += 1
 
